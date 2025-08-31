@@ -156,3 +156,37 @@ def get_question(topic_id: int):
         # Captura cualquier otro error en el proceso
         print(f"ERROR inesperado en get_question: {e}")
         return {"error": f"Ocurrió un error inesperado: {str(e)}"}, 500
+
+@app.get("/api/get-random-question")
+def get_random_question():
+    """
+    Selecciona un tema aleatorio de la base de datos, lee su PDF y
+    genera una pregunta sobre él.
+    """
+    try:
+        # 1. Obtener TODOS los temas de Supabase
+        all_topics_response = supabase.table('topics').select('id, pdf_url').execute()
+        
+        if not all_topics_response.data:
+            return {"error": "No hay temas en la base de datos."}, 404
+        
+        # 2. Elegir un tema al azar
+        random_topic = random.choice(all_topics_response.data)
+        pdf_url = random_topic['pdf_url']
+
+        # 3. Descargar y procesar el PDF (reutilizamos la lógica)
+        pdf_response = requests.get(pdf_url)
+        pdf_response.raise_for_status()
+        
+        pdf_file = io.BytesIO(pdf_response.content)
+        reader = PdfReader(pdf_file)
+        pdf_text = ""
+        for page in reader.pages:
+            pdf_text += page.extract_text() + "\n"
+        
+        if not pdf_text:
+            # Si el PDF aleatorio está vacío, podemos intentarlo de nuevo o devolver error
+            return {"error": "El PDF del tema aleatorio seleccionado está vacío."}, 400
+
+        # 4. Generar la pregunta con el prompt mejorado
+        model = genai.Generat        
