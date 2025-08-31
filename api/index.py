@@ -25,18 +25,39 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 genai.configure(api_key=GEMINI_API_KEY)
 
 # --- 2. PROMPT ENGINEERING ---
+# En tu archivo api/index.py del proyecto opoquiz-backend
+
 def create_gemini_prompt(topic_content: str) -> str:
+    # NUEVA INSTRUCCIÓN DE VARIEDAD
+    variety_instructions = [
+        "enfócate en un detalle específico o un dato numérico del texto.",
+        "basa la pregunta en una definición clave mencionada en el documento.",
+        "crea una pregunta sobre las funciones o competencias de un órgano descrito.",
+        "formula una pregunta que compare dos conceptos mencionados en el texto.",
+        "haz una pregunta sobre una excepción a una regla general descrita.",
+        "céntrate en un plazo, fecha o período de tiempo mencionado."
+    ]
+    # Elegimos una de las instrucciones al azar para cada pregunta
+    selected_instruction = random.choice(variety_instructions)
+
     return f"""
-    Eres un preparador de oposiciones experto.
+    Eres un preparador de oposiciones experto y muy creativo.
+    Tu objetivo es generar una pregunta de test variada y que ponga a prueba la atención al detalle del opositor.
+
     Basándote estrictamente en el siguiente texto, genera una pregunta de tipo test.
-    La respuesta debe ser un objeto JSON válido, sin texto adicional, con esta estructura:
+    Para asegurar la variedad, esta vez, {selected_instruction}
+
+    Requisitos estrictos de formato:
+    - La respuesta debe ser un objeto JSON válido, sin texto o explicaciones adicionales.
+    - La estructura debe ser:
     {{
       "question": "Texto de la pregunta...",
       "options": {{ "A": "...", "B": "...", "C": "...", "D": "..." }},
       "correct_answer": "LETRA_CORRECTA"
     }}
+    - Las opciones incorrectas deben ser verosímiles pero erróneas según el texto proporcionado.
 
-    Texto proporcionado:
+    Texto para basar la pregunta:
     ---
     {topic_content}
     ---
