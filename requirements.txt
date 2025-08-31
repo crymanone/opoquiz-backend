@@ -1,2 +1,6 @@
 fastapi
 uvicorn
+supabase
+python-dotenv
+google-generativeai
+requests
