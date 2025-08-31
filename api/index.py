@@ -1,22 +1,27 @@
-# api/index.py - El código de diagnóstico definitivo
+# api/index.py - LA VERSIÓN FINAL CON LAS RUTAS ABSOLUTAS CORRECTAS
 
-from http.server import BaseHTTPRequestHandler
-import json
+from fastapi import FastAPI
+app = FastAPI()
 
-class handler(BaseHTTPRequestHandler):
-    
-    def do_GET(self):
-        # Esta función ahora nos devolverá la ruta exacta que Vercel está pidiendo
-        
-        self.send_response(200)
-        self.send_header('Content-type', 'application/json')
-        self.end_headers()
-        
-        # Creamos una respuesta que INCLUYE la ruta que ha recibido
-        response_data = {
-            "message": "El servidor está vivo. Vercel está pidiendo esta ruta:",
-            "path_recibida": self.path 
-        }
-        
-        self.wfile.write(json.dumps(response_data).encode('utf-8'))
-        return
+# --- ENDPOINT RAÍZ ---
+# La ruta DEBE ser "/api/" porque es lo que Vercel nos envía.
+@app.get("/api")
+def read_root():
+    return {"status": "¡Éxito! La ruta /api/ funciona."}
+
+# --- ENDPOINT DE PRUEBA ---
+# La ruta DEBE ser "/api/hello"
+@app.get("/api/hello")
+def hello_world():
+    return {"message": "¡Éxito! La ruta /api/hello funciona."}
+
+# --- ENDPOINT REAL (DE PRUEBA) ---
+# La ruta DEBE ser "/api/get-question"
+@app.get("/api/get-question")
+def get_question():
+    test_question = {
+        "question": "¡Éxito! La ruta /api/get-question funciona.",
+        "options": { "A": "Correcto", "B": "Falso", "C": "Falso", "D": "Falso" },
+        "correct_answer": "A"
+    }
+    return test_question
