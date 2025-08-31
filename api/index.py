@@ -115,7 +115,7 @@ def generate_question_from_topic(topic_id: int):
         if not pdf_text:
             return {"error": "El PDF parece estar vacío o no contiene texto extraíble."}, 400
 
-        model = genai.GenerModel('gemini-1.5-flash-latest') # Usamos Flash que es más rápido y barato
+        model = genai.GenerativeModel('gemini-1.5-flash-latest') 
         prompt = create_gemini_prompt(pdf_text)
         gemini_response = model.generate_content(prompt)
         
