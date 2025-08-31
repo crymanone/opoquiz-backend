@@ -1,6 +1,8 @@
 from fastapi import FastAPI
 app = FastAPI()
 
-@app.get("/get-question") # <-- ¡CORREGIDO! Sin el "/api" al principio.
-def get_question():
-    return { "question": "¡FUNCIONA! Esta es la respuesta del despliegue limpio." }
+# Le decimos a FastAPI que responda en la ruta raíz "/"
+# Vercel convertirá esto en la ruta "/api/"
+@app.get("/")
+def root_handler():
+    return { "status": "OK", "message": "El servidor FastAPI está vivo en la ruta raíz." }
