@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 app = FastAPI()
 
-@app.get("/api/get-question")
+@app.get("/get-question") # <-- ¡CORREGIDO! Sin el "/api" al principio.
 def get_question():
-    return { "question": "DIAGNÓSTICO EXITOSO: El nuevo despliegue funciona." }
+    return { "question": "¡FUNCIONA! Esta es la respuesta del despliegue limpio." }
