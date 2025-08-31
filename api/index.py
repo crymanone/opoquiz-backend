@@ -127,5 +127,14 @@ def generate_question_from_topic(topic_id: int):
         
         return quiz_data
 
+    # ... final del bloque try ...
     except Exception as e:
-        return {"error": f"Error en generate_question_from_topic: {str(e)}"}, 500
+        # ---- MODIFICACIÓN PARA MEJORAR EL DEBUGGING ----
+        print(f"!!! ERROR GRAVE EN EL BACKEND: {e}") # Log para nosotros en Vercel
+    
+        # Devolvemos un error mucho más específico al frontend
+        error_details = {
+            "error": "El backend falló al generar la pregunta.",
+            "details": str(e)
+        }
+        return error_details, 500
