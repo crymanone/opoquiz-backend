@@ -44,6 +44,24 @@ def create_gemini_prompt(topic_content: str) -> str:
 def read_root():
     return {"status": "OpoQuiz API está conectada y funcionando!"}
 
+@app.get("/api/topics")
+def get_topics():
+    """
+    Consulta la base de datos de Supabase y devuelve una lista de todos los
+    temas disponibles. Cada tema incluirá su 'id' y su 'title'.
+    """
+    try:
+        # Seleccionamos solo las columnas 'id' y 'title' de la tabla 'topics'
+        response = supabase.table('topics').select('id, title').execute()
+        
+        # Devolvemos los datos en un formato JSON claro
+        return {"topics": response.data}
+    
+    except Exception as e:
+        return {"error": str(e)}, 500
+### ---- FIN DEL NUEVO ENDPOINT ---- ###
+    
+
 @app.get("/api/get-question")
 def get_question(topic_id: int):
     try:
