@@ -3,8 +3,11 @@
 from fastapi import FastAPI
 import os
 import json
+import requests  
+import io        
 from supabase import create_client, Client
 import google.generativeai as genai
+from pypdf import PdfReader # <-- Necesario para leer el PDF
 from dotenv import load_dotenv
 
 # Cargar variables de entorno para pruebas locales
@@ -64,21 +67,71 @@ def get_topics():
 
 @app.get("/api/get-question")
 def get_question(topic_id: int):
+    """
+    Obtiene el ID de un tema, busca su URL de PDF en Supabase,
+    descarga el PDF, extrae su texto y usa Gemini para generar una pregunta.
+    """
     try:
-        # Paso 1: Obtener contenido de Supabase
-        response = supabase.table('topics').select("content").eq('id', topic_id).single().execute()
-        topic_content = response.data['content']
-
-        # Paso 2: Preparar y llamar a Gemini
-        model = genai.GenerativeModel('gemini-1.5-pro-latest') # O el modelo que te funcione
-        prompt = create_gemini_prompt(topic_content)
-        gemini_response = model.generate_content(prompt)
+        # --- PASO 1: OBTENER LA URL DEL PDF DESDE SUPABASE ---
+        print(f"Buscando URL para topic_id: {topic_id}")
+        response = supabase.table('topics').select("pdf_url").eq('id', topic_id).single().execute()
         
+        # Verificar que se encontró una URL
+        if not response.data or not response.data.get('pdf_url'):
+            return {"error": f"No se encontró una URL de PDF para el topic_id {topic_id}"}, 404
+            
+        pdf_url = response.data['pdf_url']
+        print(f"URL del PDF encontrada: {pdf_url}")
+
+        # --- PASO 2: DESCARGAR EL PDF EN MEMORIA ---
+        print("Descargando el archivo PDF...")
+        pdf_response = requests.get(pdf_url, timeout=20) # Timeout de 20 segundos
+        pdf_response.raise_for_status()  # Esto lanzará un error si la descarga falla (ej. 404)
+        print("PDF descargado con éxito.")
+
+        # --- PASO 3: EXTRAER EL TEXTO DEL PDF ---
+        print("Extrayendo texto del PDF...")
+        # Usamos io.BytesIO para tratar el contenido descargado como un archivo en memoria
+        pdf_file_in_memory = io.BytesIO(pdf_response.content)
+        
+        # Usamos la librería pypdf para leer el "archivo"
+        pdf_reader = PdfReader(pdf_file_in_memory)
+        
+        pdf_text = ""
+        # Iteramos a través de todas las páginas y unimos su texto
+        for page in pdf_reader.pages:
+            page_text = page.extract_text()
+            if page_text:
+                pdf_text += page_text + "\n"
+        
+        if not pdf_text:
+            return {"error": "El PDF parece estar vacío o no contiene texto extraíble."}, 400
+        
+        print(f"Texto extraído. Total de caracteres: {len(pdf_text)}")
+
+        # --- PASO 4: LLAMAR A GEMINI CON EL TEXTO EXTRAÍDO ---
+        print("Enviando texto a Gemini para generar la pregunta...")
+        # Usamos el modelo 'flash' para velocidad y costes, pero 'pro' es más potente
+        model = genai.GenerativeModel('gemini-1.5-flash-latest') 
+        prompt = create_gemini_prompt(pdf_text)
+        gemini_response = model.generate_content(prompt)
+        print("Respuesta recibida de Gemini.")
+
+        # --- PASO 5: LIMPIAR Y DEVOLVER LA RESPUESTA JSON ---
+        # A veces Gemini envuelve el JSON en ```json ... ```, lo limpiamos.
         cleaned_response = gemini_response.text.strip().replace("```json", "").replace("```", "").strip()
+        
+        # Convertimos el texto limpio a un objeto JSON de Python (un diccionario)
         quiz_data = json.loads(cleaned_response)
         
+        print("Pregunta generada y formateada con éxito.")
         return quiz_data
 
+    except requests.exceptions.RequestException as e:
+        # Error específico si falla la descarga del PDF
+        print(f"ERROR de red al descargar el PDF: {e}")
+        return {"error": f"No se pudo descargar el archivo PDF desde la URL. Causa: {e}"}, 500
     except Exception as e:
-        # Devolvemos un error claro si algo falla
-        return {"error": str(e)}, 500
+        # Captura cualquier otro error en el proceso
+        print(f"ERROR inesperado en get_question: {e}")
+        return {"error": f"Ocurrió un error inesperado: {str(e)}"}, 500
