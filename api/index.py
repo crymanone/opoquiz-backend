@@ -10,6 +10,8 @@ from supabase import create_client, Client
 import google.generativeai as genai
 from pypdf import PdfReader
 from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 
 load_dotenv()
 app = FastAPI()
@@ -21,6 +23,10 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 genai.configure(api_key=GEMINI_API_KEY)
+
+class AskRequest(BaseModel):
+    context: str  # Aquí irá el texto completo del tema
+    query: str    # Aquí irá la pregunta del usuario
 
 # --- 2. PROMPT ENGINEERING (MEJORADO) ---
 def create_gemini_prompt(topic_content: str) -> str:
@@ -92,6 +98,42 @@ def get_random_question():
         
     except Exception as e:
         return {"error": f"Error al seleccionar un tema aleatorio: {str(e)}"}, 500
+
+@app.post("/api/ask-topic")
+def ask_topic(request: AskRequest):
+    """
+    Recibe un texto de contexto (el temario) y una pregunta del usuario.
+    Usa Gemini para generar una respuesta a la pregunta basada en el contexto.
+    """
+    try:
+        # Construimos un prompt específico para la tarea de "Tutor de IA"
+        prompt = f"""
+        Actúa como un tutor experto de oposiciones. Tu única fuente de conocimiento es el siguiente texto.
+        No puedes usar información externa. Responde a la pregunta del usuario de forma clara, concisa y
+        basándote estrictamente en la información proporcionada en el texto.
+        Si la respuesta no se encuentra en el texto, indica amablemente que no tienes
+        información sobre ese punto en el material de estudio.
+
+        --- TEXTO DEL TEMARIO ---
+        {request.context}
+        ---
+
+        --- PREGUNTA DEL USUARIO ---
+        {request.query}
+        ---
+
+        Respuesta:
+        """
+
+        # Usamos un modelo potente para tareas de razonamiento
+        model = genai.GenerativeModel('gemini-1.5-pro-latest')
+        response = model.generate_content(prompt)
+        
+        return {"answer": response.text}
+
+    except Exception as e:
+        print(f"!!! ERROR en /api/ask-topic: {e}")
+        raise HTTPException(status_code=500, detail=str(e))        
 
 # --- FUNCIÓN REUTILIZABLE PARA GENERAR PREGUNTAS ---
 def generate_question_from_topic(topic_id: int):
