@@ -1,6 +1,7 @@
-# api/index.py - VERSIÓN COMPLETA CON PROMPT MEJORADO Y ENDPOINT ALEATORIO
+# api/index.py
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 import os
 import json
 import requests
@@ -10,23 +11,22 @@ from supabase import create_client, Client
 import google.generativeai as genai
 from pypdf import PdfReader
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
 
 load_dotenv()
 app = FastAPI()
 
-# --- 1. CONFIGURACIÓN DE APIs (sin cambios) ---
+# --- DEFINIR MODELO DE DATOS PARA EL CHAT ---
+class AskRequest(BaseModel):
+    context: str
+    query: str
+
+# --- 1. CONFIGURACIÓN DE APIs ---
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 genai.configure(api_key=GEMINI_API_KEY)
-
-class AskRequest(BaseModel):
-    context: str  # Aquí irá el texto completo del tema
-    query: str    # Aquí irá la pregunta del usuario
 
 # --- 2. PROMPT ENGINEERING (MEJORADO) ---
 def create_gemini_prompt(topic_content: str) -> str:
@@ -69,71 +69,42 @@ def read_root():
 @app.get("/api/topics")
 def get_topics():
     try:
-        response = supabase.table('topics').select('id, title').execute()
+        response = supabase.table('topics').select('id, title, pdf_url').execute()
         return {"topics": response.data}
     except Exception as e:
         return {"error": str(e)}, 500
 
 @app.get("/api/get-question")
 def get_question(topic_id: int):
-    # Esta función la reutilizaremos para no repetir código
     return generate_question_from_topic(topic_id)
 
-# --- NUEVO ENDPOINT PARA PREGUNTAS ALEATORIAS ---
 @app.get("/api/get-random-question")
 def get_random_question():
     try:
-        # 1. Obtener TODOS los temas de Supabase que tengan una URL de PDF
         all_topics_response = supabase.table('topics').select('id').filter('pdf_url', 'not.is', 'null').execute()
-        
         if not all_topics_response.data:
             return {"error": "No hay temas con PDFs en la base de datos."}, 404
         
-        # 2. Elegir el ID de un tema al azar
         random_topic = random.choice(all_topics_response.data)
         random_topic_id = random_topic['id']
-        
-        # 3. Llamar a nuestra función reutilizable con ese ID aleatorio
         return generate_question_from_topic(random_topic_id)
-        
     except Exception as e:
         return {"error": f"Error al seleccionar un tema aleatorio: {str(e)}"}, 500
 
+# --- NUEVO ENDPOINT PARA EL CHAT (VERSIÓN DE PRUEBA) ---
 @app.post("/api/ask-topic")
 def ask_topic(request: AskRequest):
     """
-    Recibe un texto de contexto (el temario) y una pregunta del usuario.
-    Usa Gemini para generar una respuesta a la pregunta basada en el contexto.
+    Endpoint de prueba para el chat. Recibe una pregunta y contexto,
+    y devuelve una respuesta fija.
     """
-    try:
-        # Construimos un prompt específico para la tarea de "Tutor de IA"
-        prompt = f"""
-        Actúa como un tutor experto de oposiciones. Tu única fuente de conocimiento es el siguiente texto.
-        No puedes usar información externa. Responde a la pregunta del usuario de forma clara, concisa y
-        basándote estrictamente en la información proporcionada en el texto.
-        Si la respuesta no se encuentra en el texto, indica amablemente que no tienes
-        información sobre ese punto en el material de estudio.
-
-        --- TEXTO DEL TEMARIO ---
-        {request.context}
-        ---
-
-        --- PREGUNTA DEL USUARIO ---
-        {request.query}
-        ---
-
-        Respuesta:
-        """
-
-        # Usamos un modelo potente para tareas de razonamiento
-        model = genai.GenerativeModel('gemini-1.5-pro-latest')
-        response = model.generate_content(prompt)
-        
-        return {"answer": response.text}
-
-    except Exception as e:
-        print(f"!!! ERROR en /api/ask-topic: {e}")
-        raise HTTPException(status_code=500, detail=str(e))        
+    print(f"Recibida pregunta de chat: '{request.query}'")
+    print(f"Contexto recibido (primeros 100 caracteres): {request.context[:100]}...")
+    
+    # Devolvemos una respuesta fija para probar la conexión
+    return {
+        "answer": f"Respuesta de prueba a tu pregunta: '{request.query}'. ¡La conexión con el backend funciona!"
+    }
 
 # --- FUNCIÓN REUTILIZABLE PARA GENERAR PREGUNTAS ---
 def generate_question_from_topic(topic_id: int):
@@ -157,24 +128,18 @@ def generate_question_from_topic(topic_id: int):
         if not pdf_text:
             return {"error": "El PDF parece estar vacío o no contiene texto extraíble."}, 400
 
-        model = genai.GenerativeModel('gemini-1.5-flash-latest') 
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')
         prompt = create_gemini_prompt(pdf_text)
         gemini_response = model.generate_content(prompt)
         
         cleaned_response = gemini_response.text.strip().replace("```json", "").replace("```", "").strip()
         quiz_data = json.loads(cleaned_response)
-        
-        # Añadimos el ID del tema a la respuesta para que la app sepa de qué era la pregunta
         quiz_data['topic_id'] = topic_id
         
         return quiz_data
 
-    # ... final del bloque try ...
     except Exception as e:
-        # ---- MODIFICACIÓN PARA MEJORAR EL DEBUGGING ----
-        print(f"!!! ERROR GRAVE EN EL BACKEND: {e}") # Log para nosotros en Vercel
-    
-        # Devolvemos un error mucho más específico al frontend
+        print(f"!!! ERROR GRAVE EN EL BACKEND: {e}")
         error_details = {
             "error": "El backend falló al generar la pregunta.",
             "details": str(e)
