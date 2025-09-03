@@ -137,45 +137,26 @@ def ask_topic(request: AskRequest):
 
 # --- FUNCIÓN REUTILIZABLE PARA GENERAR PREGUNTAS ---
 
+# En api/index.py
+
 def generate_question_from_topic(topic_id: int):
     try:
-        # --- OBTENER Y LEER EL PDF (sin cambios) ---
-        response = supabase.table('topics').select("pdf_url").eq('id', topic_id).single().execute()
-        if not response.data or not response.data.get('pdf_url'):
-            return {"error": f"No se encontró URL para topic_id {topic_id}"}, 404
+        # 1. Obtener el texto pre-procesado directamente de la columna 'content'
+        response = supabase.table('topics').select("content").eq('id', topic_id).single().execute()
         
-        pdf_url = response.data['pdf_url']
-        pdf_response = requests.get(pdf_url, timeout=20)
-        pdf_response.raise_for_status()
+        if not response.data or not response.data.get('content'):
+            return {"error": f"El tema {topic_id} no tiene contenido pre-procesado."}, 404
 
-        pdf_file = io.BytesIO(pdf_response.content)
-        reader = PdfReader(pdf_file)
-        full_text = "".join(page.extract_text() for page in reader.pages if page.extract_text())
+        full_text = response.data['content']
         
-        if not full_text.strip():
-            return {"error": "El PDF está vacío o no contiene texto."}, 400
-
-        ### --- INICIO DE LA NUEVA LÓGICA DE ALEATORIEDAD --- ###
-        
-        # 1. Dividir el texto completo en fragmentos (párrafos).
-        #    Filtramos párrafos muy cortos para evitar preguntas triviales.
-        min_length = 150 # Mínimo 150 caracteres para un párrafo interesante
+        # 2. Dividir en fragmentos (la lógica de aleatoriedad que ya teníamos)
+        min_length = 150
         fragments = [p.strip() for p in full_text.split('\n\n') if len(p.strip()) > min_length]
-
-        if not fragments:
-            # Si no se encuentran párrafos largos, usamos el texto completo como fallback
-            selected_fragment = full_text
-        else:
-            # 2. Seleccionar un fragmento al azar.
-            selected_fragment = random.choice(fragments)
         
-        print(f"Fragmento aleatorio seleccionado (primeros 50 chars): {selected_fragment[:50]}...")
+        selected_fragment = random.choice(fragments) if fragments else full_text
         
-        ### --- FIN DE LA NUEVA LÓGICA --- ###
-
-        # --- LLAMAR A GEMINI CON EL NUEVO PROMPT ---
+        # 3. Llamar a Gemini (sin cambios)
         model = genai.GenerativeModel('gemini-1.5-flash-latest')
-        # Le pasamos el texto completo Y el fragmento aleatorio
         prompt = create_gemini_prompt(full_context=full_text, specific_fragment=selected_fragment)
         gemini_response = model.generate_content(prompt)
         
