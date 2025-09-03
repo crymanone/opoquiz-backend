@@ -143,86 +143,82 @@ def ask_topic(request: AskRequest):
         print(f"!!! ERROR en /api/ask-topic: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# Reemplaza esta función completa
+
 def generate_question_from_topic(topic_id: int):
     try:
-        # --- OBTENCIÓN Y FRAGMENTACIÓN (sin cambios) ---
+        # --- 1. OBTENCIÓN DE DATOS (sin cambios) ---
         response = supabase.table('topics').select("content").eq('id', topic_id).single().execute()
+        if not response.data or not response.data.get('content'):
+            return {"error": f"El tema {topic_id} no tiene contenido pre-procesado."}, 404
+        
         full_text = response.data['content']
         all_fragments = [p.strip() for p in full_text.split('\n\n') if len(p.strip()) > 150]
 
         if not all_fragments:
             return {"error": "El tema es demasiado corto para generar preguntas."}, 400
 
-        ### --- INICIO DE LA NUEVA LÓGICA CON MEMORIA Y SIMILITUD --- ###
-
-        # 1. Obtener el historial de preguntas del tema
         recent_questions_response = supabase.table('preguntas_generadas') \
             .select('question_text') \
             .eq('topic_id', topic_id) \
             .order('created_at', desc=True) \
             .limit(100) \
             .execute()
-        
         recent_question_texts = [q['question_text'] for q in recent_questions_response.data]
+
+        ### --- INICIO DE LA LÓGICA DE GENERACIÓN Y FILTRADO EN LOTE --- ###
         
-        # 2. Bucle de intentos para encontrar una pregunta única
-        MAX_ATTEMPTS = 8
-        for attempt in range(MAX_ATTEMPTS):
-            print(f"Intento de generación #{attempt + 1}")
-
-            # 2a. Generar una pregunta candidata
-            selected_fragment = random.choice(all_fragments)
-            single_prompt = f"""
-            Actúa como un tribunal de oposición. Basa una pregunta de test única y exclusivamente
-            en el siguiente FRAGMENTO ESPECÍFICO. Evita empezar la pregunta con coletillas como "Según el fragmento...".
-            Formato JSON: {{"question": "...", "options": {{...}}, "correct_answer": "..."}}
-
-            --- FRAGMENTO ESPECÍFICO ---
-            {selected_fragment}
-            ---
-            """
-            model = genai.GenerativeModel('gemini-1.5-flash-latest')
-            gemini_response = model.generate_content(single_prompt)
-            cleaned_response = gemini_response.text.strip().replace("```json", "").replace("```", "").strip()
+        # --- 2. GENERAR UN LOTE DE CANDIDATAS CON UNA SOLA LLAMADA ---
+        num_candidates = 5
+        # Asegurarnos de no pedir más fragmentos de los que hay
+        num_to_select = min(num_candidates, len(all_fragments))
+        
+        if num_to_select == 0:
+            return {"error": "No hay fragmentos válidos en el tema."}, 400
             
-            try:
-                candidate_question = json.loads(cleaned_response)
-                candidate_text = candidate_question['question']
-            except (json.JSONDecodeError, KeyError):
-                print("Gemini devolvió un JSON inválido, reintentando...")
-                continue # Saltar al siguiente intento si el JSON está mal
+        selected_fragments = random.sample(all_fragments, num_to_select)
 
-            # 2b. Comprobar si la pregunta es demasiado similar a una existente
+        # Usamos el prompt múltiple que ya teníamos
+        prompt = create_gemini_prompt_multiple(full_context=full_text, fragments=selected_fragments)
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        gemini_response = model.generate_content(prompt)
+        cleaned_response = gemini_response.text.strip().replace("```json", "").replace("```", "").strip()
+        
+        try:
+            list_of_questions = json.loads(cleaned_response)
+        except json.JSONDecodeError:
+            return {"error": "La IA devolvió un formato JSON inválido en el lote."}, 500
+
+        # --- 3. FILTRAR EL LOTE PARA ENCONTRAR UNA PREGUNTA ÚNICA ---
+        SIMILARITY_THRESHOLD = 90
+        
+        for candidate in list_of_questions:
+            candidate_text = candidate.get('question')
+            if not candidate_text: continue # Ignorar si la IA genera un objeto malformado
+
             is_too_similar = False
-            SIMILARITY_THRESHOLD = 90 # Umbral de similitud (90%)
-            
             for recent_question in recent_question_texts:
-                # Usamos token_set_ratio que es bueno para frases con orden cambiado
-                similarity_score = fuzz.token_set_ratio(candidate_text, recent_question)
-                if similarity_score > SIMILARITY_THRESHOLD:
+                if fuzz.token_set_ratio(candidate_text, recent_question) > SIMILARITY_THRESHOLD:
                     is_too_similar = True
-                    print(f"Pregunta descartada por ser {similarity_score}% similar a una existente.")
-                    break # Salir del bucle de comparación, es repetida
+                    break 
             
-            # 2c. Si no es similar, la hemos encontrado
             if not is_too_similar:
-                print("¡Pregunta única encontrada!")
-                
-                # Guardar y devolver
+                # ¡HEMOS ENCONTRADO UNA! La guardamos y la devolvemos.
+                print("¡Pregunta única encontrada en el lote!")
                 supabase.table('preguntas_generadas').insert({
                     'question_text': candidate_text,
                     'topic_id': topic_id
                 }).execute()
                 
-                candidate_question['topic_id'] = topic_id
-                return candidate_question
-
-        # 3. Si el bucle termina, nos rendimos.
-        print(f"No se pudo generar una pregunta única en {MAX_ATTEMPTS} intentos.")
-        return {"error": "No se pudo generar una pregunta única, prueba en un momento."}, 500
-
-        ### --- FIN DE LA NUEVA LÓGICA --- ###
+                candidate['topic_id'] = topic_id
+                return candidate
+        
+        # --- 4. SI NO ENCONTRAMOS NINGUNA EN EL LOTE ---
+        print("Todas las candidatas del lote eran repetidas. Devolviendo una pregunta aleatoria del lote para no fallar.")
+        # Como fallback, para que la app no se cuelgue, devolvemos una aleatoria del lote.
+        # Es mejor una repetida que un error.
+        final_question = random.choice(list_of_questions)
+        final_question['topic_id'] = topic_id
+        return final_question
 
     except Exception as e:
         print(f"!!! ERROR GRAVE EN EL BACKEND: {e}")
