@@ -88,7 +88,7 @@ def read_root():
 @app.get("/api/topics")
 def get_topics():
     try:
-        response = supabase.table('topics').select('id, title, pdf_url').execute()
+        response = supabase.table('topics').select('id, title, pdf_url,schema_url').execute()
         return {"topics": response.data}
     except Exception as e:
         return {"error": str(e)}, 500
