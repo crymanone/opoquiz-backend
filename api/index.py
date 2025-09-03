@@ -19,6 +19,7 @@ app = FastAPI()
 class AskRequest(BaseModel):
     context: str
     query: str
+    schema_url: str = None
 
 # --- 1. CONFIGURACIÓN DE APIs ---
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -28,42 +29,55 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 genai.configure(api_key=GEMINI_API_KEY)
 
-# --- 2. PROMPT ENGINEERING (MEJORADO) ---
-def create_gemini_prompt(full_context: str, specific_fragment: str) -> str:
+# --- 2. PROMPT ENGINEERING ---
+
+def create_gemini_prompt_multiple(full_context: str, fragments: list) -> str:
     variety_instructions = [
-        "enfócate en un detalle específico o un dato numérico del texto.",
-        "basa la pregunta en una definición clave mencionada en el documento.",
-        "crea una pregunta sobre las funciones o competencias de un órgano descrito.",
-        "formula una pregunta que compare dos conceptos mencionados en el texto.",
-        "haz una pregunta sobre una excepción a una regla general descrita.",
-        "céntrate en un plazo, fecha o período de tiempo mencionado."
+        "un detalle específico o un dato numérico.",
+        "una definición clave.",
+        "las funciones o competencias de un órgano descrito.",
+        "una comparación entre dos conceptos.",
+        "una excepción a una regla general.",
+        "un plazo, fecha o período de tiempo."
     ]
-    selected_instruction = random.choice(variety_instructions)
+    variety_string = ", ".join(variety_instructions)
+
+    fragment_section = ""
+    for i, fragment in enumerate(fragments):
+        fragment_section += f"\n--- FRAGMENTO {i+1} ---\n{fragment}\n"
 
     return f"""
-    Actúa como un tribunal de oposición extremadamente riguroso. Tu objetivo es crear
-    una pregunta de test muy específica.
+    Actúa como un tribunal de oposición creando un examen variado y de alta dificultad.
+    Te proporciono el CONTEXTO COMPLETO de un tema y una lista de 5 FRAGMENTOS ESPECÍFICOS.
 
-    Te proporciono dos piezas de información:
-    1.  El CONTEXTO COMPLETO del tema para que entiendas el marco general.
-    2.  Un FRAGMENTO ESPECÍFICO del tema.
+    Tu tarea es generar una lista de 5 preguntas de test. Cada pregunta debe basarse
+    única y exclusivamente en su fragmento correspondiente (Pregunta 1 -> Fragmento 1, etc.).
 
-    Tu tarea es generar una pregunta de tipo test que se base **única y exclusivamente**
-    en la información contenida dentro del **FRAGMENTO ESPECÍFICO**. Las otras opciones
-    pueden usar información del contexto general para ser distractores creíbles,
-    pero la respuesta correcta DEBE estar en el fragmento.
+    Para asegurar la máxima variedad, para cada pregunta, intenta enfocarla en un tipo
+    diferente de información. Considera los siguientes enfoques: {variety_string}
+    No te repitas en el tipo de pregunta.
 
-    Requisitos estrictos de formato:
-    - La respuesta debe ser un objeto JSON válido, sin texto adicional.
-    - Estructura: {{"question": "...", "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}}, "correct_answer": "LETRA"}}
+    La respuesta DEBE ser un array JSON que contenga 5 objetos JSON.
+    El formato de salida debe ser estrictamente este:
+    [
+        {{
+            "question": "Pregunta sobre el fragmento 1...",
+            "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}},
+            "correct_answer": "LETRA"
+        }},
+        {{
+            "question": "Pregunta sobre el fragmento 2...",
+            "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}},
+            "correct_answer": "LETRA"
+        }},
+        ... (hasta 5 preguntas)
+    ]
 
     --- CONTEXTO COMPLETO ---
     {full_context}
     ---
 
-    --- FRAGMENTO ESPECÍFICO PARA BASAR LA PREGUNTA ---
-    {specific_fragment}
-    ---
+    {fragment_section}
     """
 
 # --- 3. ENDPOINTS DE LA API ---
@@ -74,7 +88,7 @@ def read_root():
 @app.get("/api/topics")
 def get_topics():
     try:
-        response = supabase.table('topics').select('id, title, pdf_url').execute()
+        response = supabase.table('topics').select('id, title, pdf_url, schema_url').execute()
         return {"topics": response.data}
     except Exception as e:
         return {"error": str(e)}, 500
@@ -86,9 +100,9 @@ def get_question(topic_id: int):
 @app.get("/api/get-random-question")
 def get_random_question():
     try:
-        all_topics_response = supabase.table('topics').select('id').filter('pdf_url', 'not.is', 'null').execute()
+        all_topics_response = supabase.table('topics').select('id').filter('content', 'not.is', 'null').execute()
         if not all_topics_response.data:
-            return {"error": "No hay temas con PDFs en la base de datos."}, 404
+            return {"error": "No hay temas con contenido en la base de datos."}, 404
         
         random_topic = random.choice(all_topics_response.data)
         random_topic_id = random_topic['id']
@@ -96,75 +110,87 @@ def get_random_question():
     except Exception as e:
         return {"error": f"Error al seleccionar un tema aleatorio: {str(e)}"}, 500
 
-# --- NUEVO ENDPOINT PARA EL CHAT (VERSIÓN DE PRUEBA) ---
 @app.post("/api/ask-topic")
 def ask_topic(request: AskRequest):
-    """
-    Recibe un texto de contexto (el temario) y una pregunta del usuario.
-    Usa Gemini para generar una respuesta a la pregunta basada en el contexto.
-    """
     try:
-        # Construimos un prompt específico para la tarea de "Tutor de IA"
+        content_parts = []
+        if request.schema_url:
+            from PIL import Image
+            print(f"Esquema encontrado, descargando imagen desde: {request.schema_url}")
+            image_response = requests.get(request.schema_url)
+            image_response.raise_for_status()
+            img = Image.open(io.BytesIO(image_response.content))
+            content_parts.append(img)
+            content_parts.append("\nAnaliza tanto el texto como la imagen del esquema para responder.\n")
+
         prompt = f"""
-        Actúa como un tutor experto de oposiciones. Tu única fuente de conocimiento es el siguiente texto.
-        No puedes usar información externa. Responde a la pregunta del usuario de forma clara, concisa y
-        basándote estrictamente en la información proporcionada en el texto.
-        Si la respuesta no se encuentra en el texto, indica amablemente que no tienes
-        información sobre ese punto en el material de estudio.
+        Actúa como un tutor experto de oposiciones. Tus fuentes de conocimiento son el texto del temario
+        y, si se proporciona, la imagen del esquema adjunto.
+        No puedes usar información externa. Responde a la pregunta del usuario de forma clara y concisa
+        basándote estrictamente en la información proporcionada.
 
         --- TEXTO DEL TEMARIO ---
         {request.context}
         ---
-
         --- PREGUNTA DEL USUARIO ---
         {request.query}
         ---
-
-        Respuesta concisa y directa:
+        Respuesta:
         """
-
-        # Usamos un modelo rápido y eficiente para el chat
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
-        response = model.generate_content(prompt)
-        
-        # Devolvemos la respuesta real de Gemini
+        content_parts.append(prompt)
+        model = genai.GenerativeModel('gemini-1.5-pro-latest')
+        response = model.generate_content(content_parts)
         return {"answer": response.text}
-
     except Exception as e:
-        print(f"!!! ERROR GRAVE en /api/ask-topic: {e}")
-        # Si algo falla, devolvemos un mensaje de error claro a la app
-        raise HTTPException(status_code=500, detail=f"Error de la IA: {str(e)}")
+        print(f"!!! ERROR en /api/ask-topic: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 # --- FUNCIÓN REUTILIZABLE PARA GENERAR PREGUNTAS ---
-
-# En api/index.py
-
 def generate_question_from_topic(topic_id: int):
     try:
-        # 1. Obtener el texto pre-procesado directamente de la columna 'content'
         response = supabase.table('topics').select("content").eq('id', topic_id).single().execute()
-        
         if not response.data or not response.data.get('content'):
             return {"error": f"El tema {topic_id} no tiene contenido pre-procesado."}, 404
-
+        
         full_text = response.data['content']
         
-        # 2. Dividir en fragmentos (la lógica de aleatoriedad que ya teníamos)
         min_length = 150
-        fragments = [p.strip() for p in full_text.split('\n\n') if len(p.strip()) > min_length]
+        all_fragments = [p.strip() for p in full_text.split('\n\n') if len(p.strip()) > min_length]
+
+        if len(all_fragments) < 5:
+            # Fallback para temas cortos: usar la estrategia de fragmento único
+            print(f"Tema {topic_id} demasiado corto, usando fallback de fragmento único.")
+            selected_fragment = random.choice(all_fragments) if all_fragments else full_text
+            
+            single_prompt = f"""
+            Actúa como un tribunal de oposición. Basa una pregunta de test **única y exclusivamente**
+            en el siguiente FRAGMENTO ESPECÍFICO de un tema más grande.
+            Formato JSON: {{"question": "...", "options": {{...}}, "correct_answer": "..."}}
+
+            --- FRAGMENTO ESPECÍFICO ---
+            {selected_fragment}
+            ---
+            """
+            model = genai.GenerativeModel('gemini-1.5-flash-latest')
+            gemini_response = model.generate_content(single_prompt)
+            cleaned_response = gemini_response.text.strip().replace("```json", "").replace("```", "").strip()
+            final_question = json.loads(cleaned_response)
+
+        else:
+            # Estrategia de múltiples fragmentos para temas largos
+            selected_fragments = random.sample(all_fragments, 5)
+            
+            model = genai.GenerativeModel('gemini-1.5-flash-latest')
+            prompt = create_gemini_prompt_multiple(full_context=full_text, fragments=selected_fragments)
+            gemini_response = model.generate_content(prompt)
+            
+            cleaned_response = gemini_response.text.strip().replace("```json", "").replace("```", "").strip()
+            list_of_questions = json.loads(cleaned_response)
+            
+            final_question = random.choice(list_of_questions)
         
-        selected_fragment = random.choice(fragments) if fragments else full_text
-        
-        # 3. Llamar a Gemini (sin cambios)
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
-        prompt = create_gemini_prompt(full_context=full_text, specific_fragment=selected_fragment)
-        gemini_response = model.generate_content(prompt)
-        
-        cleaned_response = gemini_response.text.strip().replace("```json", "").replace("```", "").strip()
-        quiz_data = json.loads(cleaned_response)
-        quiz_data['topic_id'] = topic_id
-        
-        return quiz_data
+        final_question['topic_id'] = topic_id
+        return final_question
 
     except Exception as e:
         print(f"!!! ERROR GRAVE EN EL BACKEND: {e}")
