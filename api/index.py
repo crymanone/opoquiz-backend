@@ -32,52 +32,54 @@ genai.configure(api_key=GEMINI_API_KEY)
 
 # --- 2. PROMPT ENGINEERING ---
 
-# En api/index.py
 
 def create_gemini_prompt_multiple(full_context: str, fragments: list) -> str:
     
+    # Las instrucciones de variedad se mantienen igual
     variety_instructions = [
-        "un detalle específico o un dato numérico.",
-        "una definición clave.",
-        "las funciones o competencias de un órgano descrito.",
-        "una comparación entre dos conceptos.",
-        "una excepción a una regla general.",
-        "un plazo, fecha o período de tiempo."
+        "un detalle específico o un dato numérico.", "una definición clave.",
+        "las funciones o competencias de un órgano descrito.", "una comparación entre dos conceptos.",
+        "una excepción a una regla general.", "un plazo, fecha o período de tiempo."
     ]
     variety_string = ", ".join(variety_instructions)
 
+    # La construcción de la sección de fragmentos se mantiene igual
     fragment_section = ""
     for i, fragment in enumerate(fragments):
-        fragment_section += f"\n--- FRAGMENTO {i+1} ---\n{fragment}\n"
+        fragment_section += f"\n--- FRAGMENTO DE TEXTO #{i+1} ---\n{fragment}\n"
 
+    # --- INICIO DEL NUEVO PROMPT MEJORADO ---
     return f"""
-    Actúa como un tribunal de oposición creando un examen variado y de alta dificultad.
-    Te proporciono el CONTEXTO COMPLETO de un tema y una lista de 5 FRAGMENTOS ESPECÍFICOS.
+    **ROL Y OBJETIVO:**
+    Eres un miembro experto de un tribunal de oposiciones. Tu tarea es crear un conjunto de 5 preguntas de examen originales y variadas. No debes mencionar nunca la fuente de la información (como "según el texto" o "según el fragmento"). La pregunta debe ser directa.
 
-    Tu tarea es generar una lista de 5 preguntas de test. Cada pregunta debe basarse
-    única y exclusivamente en su fragmento correspondiente (Pregunta 1 -> Fragmento 1, etc.).
+    **FUENTES DE INFORMACIÓN PROPORCIONADAS:**
+    1.  CONTEXTO GENERAL: Un documento completo con todo el temario. Úsalo para entender el tema globalmente y crear opciones de respuesta incorrectas que sean creíbles.
+    2.  LISTA DE FRAGMENTOS: Una lista de 5 fragmentos de texto específicos.
 
-    Para asegurar la máxima variedad, para cada pregunta, intenta enfocarla en un tipo
-    diferente de información. Considera los siguientes enfoques: {variety_string}
-
-    La respuesta DEBE ser un array JSON que contenga 5 objetos JSON.
-    El formato de salida debe ser estrictamente este, sin añadir coletillas como "Según el fragmento...":
+    **INSTRUCCIONES ESTRICTAS:**
+    1.  Debes generar exactamente 5 preguntas de test.
+    2.  Cada pregunta debe basarse **única y exclusivamente en su fragmento correspondiente** (Pregunta 1 -> Fragmento 1, Pregunta 2 -> Fragmento 2, etc.).
+    3.  Para asegurar la variedad, intenta que cada pregunta se enfoque en un tipo de información diferente. Considera: {variety_string}.
+    4.  **IMPORTANTE:** Nunca, bajo ninguna circunstancia, empieces una pregunta con frases como "Según el fragmento...", "De acuerdo con el texto...", etc. La pregunta debe ser directa y autónoma.
+    
+    **FORMATO DE SALIDA OBLIGATORIO:**
+    Tu respuesta debe ser únicamente un array JSON válido, sin ningún otro texto. La estructura debe ser:
     [
-        {{
-            "question": "¿Cuál es la capital de España?",
-            "options": {{"A": "Lisboa", "B": "Madrid", "C": "París", "D": "Roma"}},
-            "correct_answer": "B"
-        }},
-        // ... 4 objetos más con la misma estructura ...
+        {{"question": "...", "options": {{...}}, "correct_answer": "..."}},
+        {{"question": "...", "options": {{...}}, "correct_answer": "..."}},
+        ... (5 objetos en total)
     ]
 
-    --- CONTEXTO COMPLETO ---
-    {full_context}
-    ---
+    **--- INICIO DE LAS FUENTES DE INFORMACIÓN ---**
 
+    **CONTEXTO GENERAL:**
+    {full_context}
+
+    **LISTA DE FRAGMENTOS:**
     {fragment_section}
     """
-
+    
 # --- 3. ENDPOINTS DE LA API ---
 @app.get("/api")
 def read_root():
