@@ -146,51 +146,68 @@ def ask_topic(request: AskRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 # --- FUNCIÓN REUTILIZABLE PARA GENERAR PREGUNTAS ---
+
 def generate_question_from_topic(topic_id: int):
     try:
+        # --- OBTENCIÓN Y FRAGMENTACIÓN DEL TEXTO (sin cambios) ---
         response = supabase.table('topics').select("content").eq('id', topic_id).single().execute()
-        if not response.data or not response.data.get('content'):
-            return {"error": f"El tema {topic_id} no tiene contenido pre-procesado."}, 404
-        
         full_text = response.data['content']
+        all_fragments = [p.strip() for p in full_text.split('\n\n') if len(p.strip()) > 150]
+
+        if not all_fragments:
+            return {"error": "El tema es demasiado corto para generar preguntas."}, 400
+
+        ### --- INICIO DE LA NUEVA LÓGICA CON MEMORIA --- ###
         
-        min_length = 150
-        all_fragments = [p.strip() for p in full_text.split('\n\n') if len(p.strip()) > min_length]
+        MAX_ATTEMPTS = 5 # Intentaremos generar una pregunta nueva hasta 5 veces
+        for attempt in range(MAX_ATTEMPTS):
+            print(f"Intento de generación de pregunta #{attempt + 1}")
 
-        if len(all_fragments) < 5:
-            # Fallback para temas cortos: usar la estrategia de fragmento único
-            print(f"Tema {topic_id} demasiado corto, usando fallback de fragmento único.")
-            selected_fragment = random.choice(all_fragments) if all_fragments else full_text
+            # 1. Generar un LOTE de preguntas candidatas
+            # (Usamos una versión simplificada del prompt múltiple para más rapidez)
+            num_candidates = 3
+            selected_fragments = random.sample(all_fragments, min(num_candidates, len(all_fragments)))
             
-            single_prompt = f"""
-            Actúa como un tribunal de oposición. Basa una pregunta de test **única y exclusivamente**
-            en el siguiente FRAGMENTO ESPECÍFICO de un tema más grande.
-            Formato JSON: {{"question": "...", "options": {{...}}, "correct_answer": "..."}}
-
-            --- FRAGMENTO ESPECÍFICO ---
-            {selected_fragment}
-            ---
-            """
-            model = genai.GenerativeModel('gemini-1.5-flash-latest')
-            gemini_response = model.generate_content(single_prompt)
-            cleaned_response = gemini_response.text.strip().replace("```json", "").replace("```", "").strip()
-            final_question = json.loads(cleaned_response)
-
-        else:
-            # Estrategia de múltiples fragmentos para temas largos
-            selected_fragments = random.sample(all_fragments, 5)
-            
-            model = genai.GenerativeModel('gemini-1.5-flash-latest')
+            # (Aquí podrías usar tu 'create_gemini_prompt_multiple' o uno más simple)
             prompt = create_gemini_prompt_multiple(full_context=full_text, fragments=selected_fragments)
+            model = genai.GenerativeModel('gemini-1.5-flash-latest')
             gemini_response = model.generate_content(prompt)
+            list_of_questions = json.loads(gemini_response.text.strip().replace("```json", "").replace("```", "").strip())
             
-            cleaned_response = gemini_response.text.strip().replace("```json", "").replace("```", "").strip()
-            list_of_questions = json.loads(cleaned_response)
+            # 2. Consultar las últimas 50 preguntas generadas de este tema
+            recent_questions_response = supabase.table('preguntas_generadas') \
+                .select('question_text') \
+                .eq('topic_id', topic_id) \
+                .order('created_at', desc=True) \
+                .limit(50) \
+                .execute()
             
-            final_question = random.choice(list_of_questions)
+            recent_question_texts = {q['question_text'] for q in recent_questions_response.data}
+
+            # 3. Filtrar las candidatas para encontrar una que sea nueva
+            new_question_found = None
+            for candidate in list_of_questions:
+                if candidate['question'] not in recent_question_texts:
+                    new_question_found = candidate
+                    break # Hemos encontrado una, salimos del bucle de candidatas
+            
+            # 4. Si encontramos una pregunta nueva, la guardamos y la devolvemos
+            if new_question_found:
+                print("¡Pregunta nueva encontrada!")
+                # Guardar la nueva pregunta en nuestra "memoria"
+                supabase.table('preguntas_generadas').insert({
+                    'question_text': new_question_found['question'],
+                    'topic_id': topic_id
+                }).execute()
+                
+                new_question_found['topic_id'] = topic_id
+                return new_question_found # ¡Éxito!
         
-        final_question['topic_id'] = topic_id
-        return final_question
+        # Si después de 5 intentos no encontramos una pregunta nueva, nos rendimos y devolvemos un error.
+        print("No se pudo generar una pregunta única después de varios intentos.")
+        return {"error": "No se pudo generar una pregunta única. Inténtalo de nuevo más tarde."}, 500
+
+        ### --- FIN DE LA NUEVA LÓGICA CON MEMORIA --- ###
 
     except Exception as e:
         print(f"!!! ERROR GRAVE EN EL BACKEND: {e}")
