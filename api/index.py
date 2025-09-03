@@ -29,7 +29,7 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 genai.configure(api_key=GEMINI_API_KEY)
 
 # --- 2. PROMPT ENGINEERING (MEJORADO) ---
-def create_gemini_prompt(topic_content: str) -> str:
+def create_gemini_prompt(full_context: str, specific_fragment: str) -> str:
     variety_instructions = [
         "enfócate en un detalle específico o un dato numérico del texto.",
         "basa la pregunta en una definición clave mencionada en el documento.",
@@ -41,23 +41,28 @@ def create_gemini_prompt(topic_content: str) -> str:
     selected_instruction = random.choice(variety_instructions)
 
     return f"""
-    Eres un preparador de oposiciones experto y muy creativo.
-    Tu objetivo es generar una pregunta de test variada y que ponga a prueba la atención al detalle del opositor.
-    Para asegurar la variedad, esta vez, {selected_instruction}
+    Actúa como un tribunal de oposición extremadamente riguroso. Tu objetivo es crear
+    una pregunta de test muy específica.
+
+    Te proporciono dos piezas de información:
+    1.  El CONTEXTO COMPLETO del tema para que entiendas el marco general.
+    2.  Un FRAGMENTO ESPECÍFICO del tema.
+
+    Tu tarea es generar una pregunta de tipo test que se base **única y exclusivamente**
+    en la información contenida dentro del **FRAGMENTO ESPECÍFICO**. Las otras opciones
+    pueden usar información del contexto general para ser distractores creíbles,
+    pero la respuesta correcta DEBE estar en el fragmento.
 
     Requisitos estrictos de formato:
-    - La respuesta debe ser un objeto JSON válido, sin texto o explicaciones adicionales.
-    - La estructura debe ser:
-    {{
-      "question": "Texto de la pregunta...",
-      "options": {{ "A": "...", "B": "...", "C": "...", "D": "..." }},
-      "correct_answer": "LETRA_CORRECTA"
-    }}
-    - Las opciones incorrectas deben ser verosímiles pero erróneas según el texto proporcionado.
+    - La respuesta debe ser un objeto JSON válido, sin texto adicional.
+    - Estructura: {{"question": "...", "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}}, "correct_answer": "LETRA"}}
 
-    Texto para basar la pregunta:
+    --- CONTEXTO COMPLETO ---
+    {full_context}
     ---
-    {topic_content}
+
+    --- FRAGMENTO ESPECÍFICO PARA BASAR LA PREGUNTA ---
+    {specific_fragment}
     ---
     """
 
@@ -131,11 +136,13 @@ def ask_topic(request: AskRequest):
         raise HTTPException(status_code=500, detail=f"Error de la IA: {str(e)}")
 
 # --- FUNCIÓN REUTILIZABLE PARA GENERAR PREGUNTAS ---
+
 def generate_question_from_topic(topic_id: int):
     try:
+        # --- OBTENER Y LEER EL PDF (sin cambios) ---
         response = supabase.table('topics').select("pdf_url").eq('id', topic_id).single().execute()
         if not response.data or not response.data.get('pdf_url'):
-            return {"error": f"No se encontró una URL de PDF para el topic_id {topic_id}"}, 404
+            return {"error": f"No se encontró URL para topic_id {topic_id}"}, 404
         
         pdf_url = response.data['pdf_url']
         pdf_response = requests.get(pdf_url, timeout=20)
@@ -143,17 +150,33 @@ def generate_question_from_topic(topic_id: int):
 
         pdf_file = io.BytesIO(pdf_response.content)
         reader = PdfReader(pdf_file)
-        pdf_text = ""
-        for page in reader.pages:
-            page_text = page.extract_text()
-            if page_text:
-                pdf_text += page_text + "\n"
+        full_text = "".join(page.extract_text() for page in reader.pages if page.extract_text())
         
-        if not pdf_text:
-            return {"error": "El PDF parece estar vacío o no contiene texto extraíble."}, 400
+        if not full_text.strip():
+            return {"error": "El PDF está vacío o no contiene texto."}, 400
 
+        ### --- INICIO DE LA NUEVA LÓGICA DE ALEATORIEDAD --- ###
+        
+        # 1. Dividir el texto completo en fragmentos (párrafos).
+        #    Filtramos párrafos muy cortos para evitar preguntas triviales.
+        min_length = 150 # Mínimo 150 caracteres para un párrafo interesante
+        fragments = [p.strip() for p in full_text.split('\n\n') if len(p.strip()) > min_length]
+
+        if not fragments:
+            # Si no se encuentran párrafos largos, usamos el texto completo como fallback
+            selected_fragment = full_text
+        else:
+            # 2. Seleccionar un fragmento al azar.
+            selected_fragment = random.choice(fragments)
+        
+        print(f"Fragmento aleatorio seleccionado (primeros 50 chars): {selected_fragment[:50]}...")
+        
+        ### --- FIN DE LA NUEVA LÓGICA --- ###
+
+        # --- LLAMAR A GEMINI CON EL NUEVO PROMPT ---
         model = genai.GenerativeModel('gemini-1.5-flash-latest')
-        prompt = create_gemini_prompt(pdf_text)
+        # Le pasamos el texto completo Y el fragmento aleatorio
+        prompt = create_gemini_prompt(full_context=full_text, specific_fragment=selected_fragment)
         gemini_response = model.generate_content(prompt)
         
         cleaned_response = gemini_response.text.strip().replace("```json", "").replace("```", "").strip()
@@ -164,8 +187,5 @@ def generate_question_from_topic(topic_id: int):
 
     except Exception as e:
         print(f"!!! ERROR GRAVE EN EL BACKEND: {e}")
-        error_details = {
-            "error": "El backend falló al generar la pregunta.",
-            "details": str(e)
-        }
+        error_details = {"error": "El backend falló al generar la pregunta.", "details": str(e)}
         return error_details, 500
