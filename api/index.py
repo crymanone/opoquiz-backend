@@ -11,6 +11,7 @@ from supabase import create_client, Client
 import google.generativeai as genai
 from pypdf import PdfReader
 from dotenv import load_dotenv
+from thefuzz import fuzz
 
 load_dotenv()
 app = FastAPI()
@@ -142,28 +143,20 @@ def ask_topic(request: AskRequest):
         print(f"!!! ERROR en /api/ask-topic: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
-# --- FUNCIÓN REUTILIZABLE PARA GENERAR PREGUNTAS (VERSIÓN CON MEMORIA CORREGIDA) ---
+# Reemplaza esta función completa
 def generate_question_from_topic(topic_id: int):
     try:
         # --- OBTENCIÓN Y FRAGMENTACIÓN (sin cambios) ---
         response = supabase.table('topics').select("content").eq('id', topic_id).single().execute()
-        if not response.data or not response.data.get('content'):
-            return {"error": f"El tema {topic_id} no tiene contenido pre-procesado."}, 404
-        
         full_text = response.data['content']
         all_fragments = [p.strip() for p in full_text.split('\n\n') if len(p.strip()) > 150]
 
         if not all_fragments:
             return {"error": "El tema es demasiado corto para generar preguntas."}, 400
 
-        ### --- INICIO DE LA NUEVA LÓGICA DE MEMORIA --- ###
+        ### --- INICIO DE LA NUEVA LÓGICA CON MEMORIA Y SIMILITUD --- ###
 
-        # 1. Función para normalizar texto (ignorar mayúsculas, espacios, etc.)
-        def normalize_text(text):
-            return ''.join(text.lower().split())
-
-        # 2. Obtener el historial de preguntas UNA SOLA VEZ
+        # 1. Obtener el historial de preguntas del tema
         recent_questions_response = supabase.table('preguntas_generadas') \
             .select('question_text') \
             .eq('topic_id', topic_id) \
@@ -171,18 +164,15 @@ def generate_question_from_topic(topic_id: int):
             .limit(100) \
             .execute()
         
-        # Guardamos una versión normalizada del historial para comparar
-        recent_questions_normalized = {normalize_text(q['question_text']) for q in recent_questions_response.data}
+        recent_question_texts = [q['question_text'] for q in recent_questions_response.data]
         
-        # 3. Bucle de intentos para encontrar una pregunta única
-        MAX_ATTEMPTS = 7 # Aumentamos los intentos
+        # 2. Bucle de intentos para encontrar una pregunta única
+        MAX_ATTEMPTS = 8
         for attempt in range(MAX_ATTEMPTS):
             print(f"Intento de generación #{attempt + 1}")
 
-            # 3a. Seleccionar un fragmento aleatorio
+            # 2a. Generar una pregunta candidata
             selected_fragment = random.choice(all_fragments)
-            
-            # 3b. Generar UNA SOLA pregunta candidata
             single_prompt = f"""
             Actúa como un tribunal de oposición. Basa una pregunta de test única y exclusivamente
             en el siguiente FRAGMENTO ESPECÍFICO. Evita empezar la pregunta con coletillas como "Según el fragmento...".
@@ -195,28 +185,44 @@ def generate_question_from_topic(topic_id: int):
             model = genai.GenerativeModel('gemini-1.5-flash-latest')
             gemini_response = model.generate_content(single_prompt)
             cleaned_response = gemini_response.text.strip().replace("```json", "").replace("```", "").strip()
-            candidate_question = json.loads(cleaned_response)
             
-            # 3c. Comprobar si la pregunta es nueva (usando la versión normalizada)
-            candidate_normalized = normalize_text(candidate_question['question'])
+            try:
+                candidate_question = json.loads(cleaned_response)
+                candidate_text = candidate_question['question']
+            except (json.JSONDecodeError, KeyError):
+                print("Gemini devolvió un JSON inválido, reintentando...")
+                continue # Saltar al siguiente intento si el JSON está mal
+
+            # 2b. Comprobar si la pregunta es demasiado similar a una existente
+            is_too_similar = False
+            SIMILARITY_THRESHOLD = 90 # Umbral de similitud (90%)
             
-            if candidate_normalized not in recent_questions_normalized:
+            for recent_question in recent_question_texts:
+                # Usamos token_set_ratio que es bueno para frases con orden cambiado
+                similarity_score = fuzz.token_set_ratio(candidate_text, recent_question)
+                if similarity_score > SIMILARITY_THRESHOLD:
+                    is_too_similar = True
+                    print(f"Pregunta descartada por ser {similarity_score}% similar a una existente.")
+                    break # Salir del bucle de comparación, es repetida
+            
+            # 2c. Si no es similar, la hemos encontrado
+            if not is_too_similar:
                 print("¡Pregunta única encontrada!")
                 
-                # 3d. Guardar la pregunta en la base de datos y devolverla
+                # Guardar y devolver
                 supabase.table('preguntas_generadas').insert({
-                    'question_text': candidate_question['question'],
+                    'question_text': candidate_text,
                     'topic_id': topic_id
                 }).execute()
                 
                 candidate_question['topic_id'] = topic_id
                 return candidate_question
 
-        # 4. Si el bucle termina, no hemos encontrado una pregunta única.
+        # 3. Si el bucle termina, nos rendimos.
         print(f"No se pudo generar una pregunta única en {MAX_ATTEMPTS} intentos.")
         return {"error": "No se pudo generar una pregunta única, prueba en un momento."}, 500
 
-        ### --- FIN DE LA NUEVA LÓGICA DE MEMORIA --- ###
+        ### --- FIN DE LA NUEVA LÓGICA --- ###
 
     except Exception as e:
         print(f"!!! ERROR GRAVE EN EL BACKEND: {e}")

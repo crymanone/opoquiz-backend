@@ -9,3 +9,5 @@ requests
 pypdf
 pydantic
 pypdfium2
+thefuzz
+python-Levenshtein
