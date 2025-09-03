@@ -31,7 +31,10 @@ genai.configure(api_key=GEMINI_API_KEY)
 
 # --- 2. PROMPT ENGINEERING ---
 
+# En api/index.py
+
 def create_gemini_prompt_multiple(full_context: str, fragments: list) -> str:
+    
     variety_instructions = [
         "un detalle específico o un dato numérico.",
         "una definición clave.",
@@ -55,22 +58,16 @@ def create_gemini_prompt_multiple(full_context: str, fragments: list) -> str:
 
     Para asegurar la máxima variedad, para cada pregunta, intenta enfocarla en un tipo
     diferente de información. Considera los siguientes enfoques: {variety_string}
-    No te repitas en el tipo de pregunta.
 
     La respuesta DEBE ser un array JSON que contenga 5 objetos JSON.
-    El formato de salida debe ser estrictamente este:
+    El formato de salida debe ser estrictamente este, sin añadir coletillas como "Según el fragmento...":
     [
         {{
-            "question": "Pregunta sobre el fragmento 1...",
-            "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}},
-            "correct_answer": "LETRA"
+            "question": "¿Cuál es la capital de España?",
+            "options": {{"A": "Lisboa", "B": "Madrid", "C": "París", "D": "Roma"}},
+            "correct_answer": "B"
         }},
-        {{
-            "question": "Pregunta sobre el fragmento 2...",
-            "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}},
-            "correct_answer": "LETRA"
-        }},
-        ... (hasta 5 preguntas)
+        // ... 4 objetos más con la misma estructura ...
     ]
 
     --- CONTEXTO COMPLETO ---
@@ -145,69 +142,81 @@ def ask_topic(request: AskRequest):
         print(f"!!! ERROR en /api/ask-topic: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-# --- FUNCIÓN REUTILIZABLE PARA GENERAR PREGUNTAS ---
 
+# --- FUNCIÓN REUTILIZABLE PARA GENERAR PREGUNTAS (VERSIÓN CON MEMORIA CORREGIDA) ---
 def generate_question_from_topic(topic_id: int):
     try:
-        # --- OBTENCIÓN Y FRAGMENTACIÓN DEL TEXTO (sin cambios) ---
+        # --- OBTENCIÓN Y FRAGMENTACIÓN (sin cambios) ---
         response = supabase.table('topics').select("content").eq('id', topic_id).single().execute()
+        if not response.data or not response.data.get('content'):
+            return {"error": f"El tema {topic_id} no tiene contenido pre-procesado."}, 404
+        
         full_text = response.data['content']
         all_fragments = [p.strip() for p in full_text.split('\n\n') if len(p.strip()) > 150]
 
         if not all_fragments:
             return {"error": "El tema es demasiado corto para generar preguntas."}, 400
 
-        ### --- INICIO DE LA NUEVA LÓGICA CON MEMORIA --- ###
+        ### --- INICIO DE LA NUEVA LÓGICA DE MEMORIA --- ###
+
+        # 1. Función para normalizar texto (ignorar mayúsculas, espacios, etc.)
+        def normalize_text(text):
+            return ''.join(text.lower().split())
+
+        # 2. Obtener el historial de preguntas UNA SOLA VEZ
+        recent_questions_response = supabase.table('preguntas_generadas') \
+            .select('question_text') \
+            .eq('topic_id', topic_id) \
+            .order('created_at', desc=True) \
+            .limit(100) \
+            .execute()
         
-        MAX_ATTEMPTS = 5 # Intentaremos generar una pregunta nueva hasta 5 veces
+        # Guardamos una versión normalizada del historial para comparar
+        recent_questions_normalized = {normalize_text(q['question_text']) for q in recent_questions_response.data}
+        
+        # 3. Bucle de intentos para encontrar una pregunta única
+        MAX_ATTEMPTS = 7 # Aumentamos los intentos
         for attempt in range(MAX_ATTEMPTS):
-            print(f"Intento de generación de pregunta #{attempt + 1}")
+            print(f"Intento de generación #{attempt + 1}")
 
-            # 1. Generar un LOTE de preguntas candidatas
-            # (Usamos una versión simplificada del prompt múltiple para más rapidez)
-            num_candidates = 3
-            selected_fragments = random.sample(all_fragments, min(num_candidates, len(all_fragments)))
+            # 3a. Seleccionar un fragmento aleatorio
+            selected_fragment = random.choice(all_fragments)
             
-            # (Aquí podrías usar tu 'create_gemini_prompt_multiple' o uno más simple)
-            prompt = create_gemini_prompt_multiple(full_context=full_text, fragments=selected_fragments)
+            # 3b. Generar UNA SOLA pregunta candidata
+            single_prompt = f"""
+            Actúa como un tribunal de oposición. Basa una pregunta de test única y exclusivamente
+            en el siguiente FRAGMENTO ESPECÍFICO. Evita empezar la pregunta con coletillas como "Según el fragmento...".
+            Formato JSON: {{"question": "...", "options": {{...}}, "correct_answer": "..."}}
+
+            --- FRAGMENTO ESPECÍFICO ---
+            {selected_fragment}
+            ---
+            """
             model = genai.GenerativeModel('gemini-1.5-flash-latest')
-            gemini_response = model.generate_content(prompt)
-            list_of_questions = json.loads(gemini_response.text.strip().replace("```json", "").replace("```", "").strip())
+            gemini_response = model.generate_content(single_prompt)
+            cleaned_response = gemini_response.text.strip().replace("```json", "").replace("```", "").strip()
+            candidate_question = json.loads(cleaned_response)
             
-            # 2. Consultar las últimas 50 preguntas generadas de este tema
-            recent_questions_response = supabase.table('preguntas_generadas') \
-                .select('question_text') \
-                .eq('topic_id', topic_id) \
-                .order('created_at', desc=True) \
-                .limit(50) \
-                .execute()
+            # 3c. Comprobar si la pregunta es nueva (usando la versión normalizada)
+            candidate_normalized = normalize_text(candidate_question['question'])
             
-            recent_question_texts = {q['question_text'] for q in recent_questions_response.data}
-
-            # 3. Filtrar las candidatas para encontrar una que sea nueva
-            new_question_found = None
-            for candidate in list_of_questions:
-                if candidate['question'] not in recent_question_texts:
-                    new_question_found = candidate
-                    break # Hemos encontrado una, salimos del bucle de candidatas
-            
-            # 4. Si encontramos una pregunta nueva, la guardamos y la devolvemos
-            if new_question_found:
-                print("¡Pregunta nueva encontrada!")
-                # Guardar la nueva pregunta en nuestra "memoria"
+            if candidate_normalized not in recent_questions_normalized:
+                print("¡Pregunta única encontrada!")
+                
+                # 3d. Guardar la pregunta en la base de datos y devolverla
                 supabase.table('preguntas_generadas').insert({
-                    'question_text': new_question_found['question'],
+                    'question_text': candidate_question['question'],
                     'topic_id': topic_id
                 }).execute()
                 
-                new_question_found['topic_id'] = topic_id
-                return new_question_found # ¡Éxito!
-        
-        # Si después de 5 intentos no encontramos una pregunta nueva, nos rendimos y devolvemos un error.
-        print("No se pudo generar una pregunta única después de varios intentos.")
-        return {"error": "No se pudo generar una pregunta única. Inténtalo de nuevo más tarde."}, 500
+                candidate_question['topic_id'] = topic_id
+                return candidate_question
 
-        ### --- FIN DE LA NUEVA LÓGICA CON MEMORIA --- ###
+        # 4. Si el bucle termina, no hemos encontrado una pregunta única.
+        print(f"No se pudo generar una pregunta única en {MAX_ATTEMPTS} intentos.")
+        return {"error": "No se pudo generar una pregunta única, prueba en un momento."}, 500
+
+        ### --- FIN DE LA NUEVA LÓGICA DE MEMORIA --- ###
 
     except Exception as e:
         print(f"!!! ERROR GRAVE EN EL BACKEND: {e}")
