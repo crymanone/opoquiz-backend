@@ -12,7 +12,7 @@ import google.generativeai as genai
 from pypdf import PdfReader
 from dotenv import load_dotenv
 from thefuzz import fuzz
-from pydantic import BaseModel
+from typing import Optional
 
 
 load_dotenv()
@@ -32,7 +32,8 @@ class NewTestRequest(BaseModel):
 class AskRequest(BaseModel):
     context: str
     query: str
-    schema_url: str = None
+    # Le decimos a Pydantic que este campo es opcional y puede ser un string o None
+    schema_url: Optional[str] = None
 
 # --- 1. CONFIGURACIÓN DE APIs ---
 SUPABASE_URL = os.getenv("SUPABASE_URL")
