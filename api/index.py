@@ -12,9 +12,21 @@ import google.generativeai as genai
 from pypdf import PdfReader
 from dotenv import load_dotenv
 from thefuzz import fuzz
+from pydantic import BaseModel
+
 
 load_dotenv()
 app = FastAPI()
+
+class TestResponse(BaseModel):
+    test_id: int
+    question_text: str
+    was_correct: bool
+    topic_id: int
+
+class NewTestRequest(BaseModel):
+    topic_id: int = None
+    is_random_test: bool = False
 
 # --- DEFINIR MODELO DE DATOS PARA EL CHAT ---
 class AskRequest(BaseModel):
@@ -144,7 +156,59 @@ def ask_topic(request: AskRequest):
     except Exception as e:
         print(f"!!! ERROR en /api/ask-topic: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+        
+@app.post("/api/tests/start")
+def start_new_test(request: NewTestRequest):
+    try:
+        test_data = { "topic_id": request.topic_id, "is_random_test": request.is_random_test }
+        response = supabase.table('tests').insert(test_data).execute()
+        new_test_id = response.data[0]['id']
+        return {"test_id": new_test_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/api/tests/answer")
+def record_answer(response: TestResponse):
+    try:
+        supabase.table('test_respuestas').insert({
+            "test_id": response.test_id,
+            "question_text": response.question_text,
+            "was_correct": response.was_correct,
+            "topic_id": response.topic_id
+        }).execute()
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/stats")
+def get_stats():
+    try:
+        resp_response = supabase.table('test_respuestas').select('*', count='exact').execute()
+        respuestas = resp_response.data
+        total = len(respuestas) # resp_response.count si se usa count='exact'
+        
+        if total == 0:
+            return {'total_answered': 0, 'correct': 0, 'incorrect': 0, 'by_topic': {}, 'accuracy': 0}
+
+        correctas = sum(1 for r in respuestas if r['was_correct'])
+        incorrectas = total - correctas
+        accuracy = (correctas / total) * 100
+        
+        by_topic = {}
+        for r in respuestas:
+            topic_id = r['topic_id']
+            if topic_id not in by_topic:
+                by_topic[topic_id] = {'correct': 0, 'incorrect': 0}
+            
+            if r['was_correct']: by_topic[topic_id]['correct'] += 1
+            else: by_topic[topic_id]['incorrect'] += 1
+        
+        return {
+            'total_answered': total, 'correct': correctas,
+            'incorrect': incorrectas, 'by_topic': by_topic, 'accuracy': accuracy
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 def generate_question_from_topic(topic_id: int):
     try:
