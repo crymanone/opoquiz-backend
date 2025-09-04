@@ -214,37 +214,28 @@ def generate_question_from_topic(topic_id: int):
     try:
         # --- 1. OBTENCIÓN DE DATOS (sin cambios) ---
         response = supabase.table('topics').select("content").eq('id', topic_id).single().execute()
-        if not response.data or not response.data.get('content'):
+        full_text = response.data.get('content')
+        if not full_text:
             return {"error": f"El tema {topic_id} no tiene contenido pre-procesado."}, 404
         
-        full_text = response.data['content']
         all_fragments = [p.strip() for p in full_text.split('\n\n') if len(p.strip()) > 150]
-
         if not all_fragments:
-            return {"error": "El tema es demasiado corto para generar preguntas."}, 400
+            return {"error": "El tema es demasiado corto para generar fragmentos."}, 400
 
-        recent_questions_response = supabase.table('preguntas_generadas') \
-            .select('question_text') \
-            .eq('topic_id', topic_id) \
-            .order('created_at', desc=True) \
-            .limit(100) \
-            .execute()
+        recent_questions_response = supabase.table('preguntas_generadas').select('question_text').eq('topic_id', topic_id).order('created_at', desc=True).limit(100).execute()
         recent_question_texts = [q['question_text'] for q in recent_questions_response.data]
 
-        ### --- INICIO DE LA LÓGICA DE GENERACIÓN Y FILTRADO EN LOTE --- ###
+        ### --- INICIO DE LA LÓGICA DE GENERACIÓN Y FILTRADO EN LOTE (RÁPIDA) --- ###
         
         # --- 2. GENERAR UN LOTE DE CANDIDATAS CON UNA SOLA LLAMADA ---
         num_candidates = 5
-        # Asegurarnos de no pedir más fragmentos de los que hay
         num_to_select = min(num_candidates, len(all_fragments))
-        
         if num_to_select == 0:
             return {"error": "No hay fragmentos válidos en el tema."}, 400
             
         selected_fragments = random.sample(all_fragments, num_to_select)
-
-        # Usamos el prompt múltiple que ya teníamos
         prompt = create_gemini_prompt_multiple(full_context=full_text, fragments=selected_fragments)
+        
         model = genai.GenerativeModel('gemini-1.5-flash-latest')
         gemini_response = model.generate_content(prompt)
         cleaned_response = gemini_response.text.strip().replace("```json", "").replace("```", "").strip()
@@ -259,34 +250,22 @@ def generate_question_from_topic(topic_id: int):
         
         for candidate in list_of_questions:
             candidate_text = candidate.get('question')
-            if not candidate_text: continue # Ignorar si la IA genera un objeto malformado
+            if not candidate_text: continue
 
-            is_too_similar = False
-            for recent_question in recent_question_texts:
-                if fuzz.token_set_ratio(candidate_text, recent_question) > SIMILARITY_THRESHOLD:
-                    is_too_similar = True
-                    break 
+            is_too_similar = any(fuzz.token_set_ratio(candidate_text, r) > SIMILARITY_THRESHOLD for r in recent_question_texts)
             
             if not is_too_similar:
-                # ¡HEMOS ENCONTRADO UNA! La guardamos y la devolvemos.
                 print("¡Pregunta única encontrada en el lote!")
-                supabase.table('preguntas_generadas').insert({
-                    'question_text': candidate_text,
-                    'topic_id': topic_id
-                }).execute()
-                
+                supabase.table('preguntas_generadas').insert({'question_text': candidate_text, 'topic_id': topic_id}).execute()
                 candidate['topic_id'] = topic_id
                 return candidate
         
-        # --- 4. SI NO ENCONTRAMOS NINGUNA EN EL LOTE ---
-        print("Todas las candidatas del lote eran repetidas. Devolviendo una pregunta aleatoria del lote para no fallar.")
-        # Como fallback, para que la app no se cuelgue, devolvemos una aleatoria del lote.
-        # Es mejor una repetida que un error.
+        # --- 4. FALLBACK: SI TODAS SON REPETIDAS, DEVOLVER UNA ALEATORIA ---
+        print("Todas las candidatas del lote eran repetidas. Devolviendo una aleatoria para no fallar.")
         final_question = random.choice(list_of_questions)
         final_question['topic_id'] = topic_id
         return final_question
 
     except Exception as e:
         print(f"!!! ERROR GRAVE EN EL BACKEND: {e}")
-        error_details = {"error": "El backend falló al generar la pregunta.", "details": str(e)}
-        return error_details, 500
+        return {"error": "El backend falló al generar la pregunta.", "details": str(e)}, 500
