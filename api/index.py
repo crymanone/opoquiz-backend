@@ -210,6 +210,27 @@ def get_stats():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/api/stats/most-failed-questions")
+def get_most_failed_questions():
+    """
+    Busca en la base de datos y devuelve las 5 preguntas que han sido
+    respondidas incorrectamente más veces.
+    """
+    try:
+        # Esta es una consulta SQL más avanzada que le pasamos a Supabase.
+        # Cuenta las ocurrencias de cada pregunta donde was_correct es FALSE,
+        # las agrupa, las ordena de mayor a menor y coge las 5 primeras.
+        response = supabase.rpc('get_most_failed_questions', {}).execute()
+        
+        if response.data:
+            return {"ok": True, "questions": response.data}
+        else:
+            return {"ok": True, "questions": []}
+            
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))        
+
 def generate_question_from_topic(topic_id: int):
     try:
         # --- 1. OBTENCIÓN DE DATOS (sin cambios) ---
