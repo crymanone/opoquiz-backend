@@ -11,3 +11,4 @@ pydantic
 pypdfium2
 thefuzz
 python-Levenshtein
+firebase-admin
