@@ -126,8 +126,41 @@ def get_random_question(user_id: str = Depends(get_current_user)):
 
 @app.post("/api/ask-topic")
 def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
-    # ... (La lógica del chat va aquí, se puede proteger de la misma forma) ...
-    return {"answer": "Función de chat en desarrollo."}
+    """
+    Recibe un texto de contexto (el temario) y una pregunta del usuario.
+    Usa Gemini para generar una respuesta a la pregunta basada en el contexto.
+    """
+    try:
+        # Construimos un prompt específico para la tarea de "Tutor de IA"
+        prompt = f"""
+        Actúa como un tutor experto de oposiciones. Tu única fuente de conocimiento es el siguiente texto.
+        No puedes usar información externa. Responde a la pregunta del usuario de forma clara, concisa y
+        basándote estrictamente en la información proporcionada en el texto.
+        Si la respuesta no se encuentra en el texto, indica amablemente que no tienes
+        información sobre ese punto en el material de estudio.
+
+        --- TEXTO DEL TEMARIO ---
+        {request.context}
+        ---
+
+        --- PREGUNTA DEL USUARIO ---
+        {request.query}
+        ---
+
+        Respuesta concisa y directa:
+        """
+
+        # Usamos un modelo rápido y eficiente para el chat
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        response = model.generate_content(prompt)
+        
+        # Devolvemos la respuesta real de Gemini
+        return {"answer": response.text}
+
+    except Exception as e:
+        print(f"!!! ERROR GRAVE en /api/ask-topic: {e}")
+        # Si algo falla, devolvemos un mensaje de error claro a la app
+        raise HTTPException(status_code=500, detail=f"Error de la IA: {str(e)}")
 
 @app.post("/api/tests/start")
 def start_new_test(request: NewTestRequest, user_id: str = Depends(get_current_user)):
