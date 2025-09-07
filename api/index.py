@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from thefuzz import fuzz
 import firebase_admin
 from firebase_admin import credentials, auth
+import re
 
 load_dotenv()
 app = FastAPI()
@@ -127,106 +128,102 @@ def get_random_question(user_id: str = Depends(get_current_user)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al seleccionar tema aleatorio: {str(e)}")
 
-# Reemplaza la función ask_topic completa en tu api/index.py con esta:
-
 @app.post("/api/ask-topic")
 def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
     try:
-        user_query_lower = request.query.lower()
-
-        # Condición para detectar la petición de resumen a través de un comando especial
         is_summary_request = (request.query == "SYSTEM_COMMAND_GENERATE_SUMMARY")
 
+        # --- LÓGICA DE PROMPT CORREGIDA ---
+
         if is_summary_request and request.summary_context:
-            print("Petición de resumen detectada. Usando 'summary_context' con prompt especializado.")
+            print("Petición de resumen detectada. Usando prompt especializado.")
             
+            # --- USAMOS DE NUEVO EL PROMPT DETALLADO Y EXIGENTE ---
             prompt = f"""
-            **ROL:** Eres un académico experto en derecho y un preparador de oposiciones de élite.
-            Tu tarea es crear un resumen ejecutivo y muy bien estructurado del temario proporcionado.
+            **ROL:** Eres un académico experto y un preparador de oposiciones de élite.
+            **TAREA:** Crea un resumen ejecutivo EXTENSO y muy bien estructurado del temario proporcionado.
 
-            **INSTRUCCIONES ESPECÍFICAS PARA EL RESUMEN:**
-            1.  **Formato:** Estructura tu respuesta usando Markdown. Utiliza encabezados, negritas y listas de viñetas para una máxima claridad.
-            2.  **Puntos Clave:** Identifica y extrae los conceptos, definiciones y datos más importantes del texto. No hagas un resumen genérico; enfócate en lo que un opositor necesita memorizar.
-            3.  **Artículos Relevantes:** Menciona explícitamente los números de los artículos más importantes discutidos en el texto (ej: "según el Artículo 9.3...").
-            4.  **Fechas y Plazos:** Si el texto menciona fechas, plazos o datos numéricos cruciales, destácalos claramente en una sección o en negrita.
-            5.  **Leyes y Regulaciones:** Si se mencionan otras leyes o Reales Decretos, inclúyelos en el resumen.
-            6.  **Extensión:** El resumen debe ser extenso y detallado, cubriendo todos los puntos importantes del texto proporcionado, pero sin añadir información externa.
+            **INSTRUCCIONES OBLIGATORIAS:**
+            1.  **Formato Markdown:** Usa encabezados (`#`), negritas (`**...**`) y listas (`- ...`) para una máxima claridad.
+            2.  **Puntos Clave:** Identifica y extrae los conceptos, definiciones y datos más importantes.
+            3.  **Artículos, Fechas y Leyes:** Menciona y destaca explícitamente cualquier artículo, fecha, plazo o ley relevante que aparezca en el texto.
+            4.  **Extensión y Detalle:** El resumen debe ser detallado y cubrir todos los puntos importantes del texto. No seas escueto.
 
-            **--- TEXTO DEL RESUMEN/ESQUEMA PARA ANALIZAR ---**
+            **--- TEXTO DEL RESUMEN A ANALIZAR ---**
             {request.summary_context}
             ---
 
-            **--- RESUMEN ESTRUCTURADO ---**
+            **--- EMPIEZA AQUÍ TU RESUMEN ESTRUCTURADO ---**
             """
-        else:
-            # Lógica para preguntas normales del usuario
+            model = genai.GenerativeModel('gemini-1.5-pro-latest') # Usamos Pro para la mejor calidad de resumen
+
+        else: # Lógica para preguntas normales del usuario
             print("Petición de pregunta normal detectada.")
             context_to_use = request.context or request.summary_context
-            
             if not context_to_use:
-                return {"answer": "Lo siento, no se ha proporcionado ningún temario para poder responder a tu pregunta."}
+                return {"answer": "Lo siento, no se ha proporcionado temario para responder."}
             
             prompt = f"""
-            Actúa como un tutor experto de oposiciones extremadamente preciso y riguroso. Tu única fuente
-            de conocimiento es el siguiente texto. No puedes usar información externa.
-
-            INSTRUCCIONES:
-            1. Responde a la pregunta del usuario de forma clara y directa.
-            2. Después de tu respuesta, añade una sección llamada "Fuente" y cita textualmente la
-               frase o frases del temario proporcionado en las que te has basado para responder.
-            3. Si la respuesta no se encuentra en el texto, indícalo claramente.
-
+            Actúa como un tutor experto. Responde a la pregunta del usuario basándote
+            estrictamente en el TEXTO DEL TEMARIO. Después de tu respuesta, añade una sección
+            "**Fuente:**" y cita textualmente la frase en la que te has basado.
+            
             --- TEXTO DEL TEMARIO ---
             {context_to_use}
             ---
-
             --- PREGUNTA DEL USUARIO ---
             {request.query}
             ---
             """
-        
-        # El modelo Pro es ideal para ambas tareas, tanto de razonamiento como de resumen
-        model = genai.GenerativeModel('gemini-1.5-pro-latest')
+            model = genai.GenerativeModel('gemini-1.5-pro-latest') # Mantenemos Pro para la máxima precisión
+
         response = model.generate_content(prompt)
-        
         return {"answer": response.text}
 
     except Exception as e:
-        print(f"!!! ERROR GRAVE en /api/ask-topic: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.post("/api/get-highlighted-explanation")
 def get_highlighted_explanation(request: HighlightRequest, user_id: str = Depends(get_current_user)):
     try:
-        # Buscamos primero fragmentos etiquetados como de examen
-        priority_fragments = [p for p in request.context.split('\n\n') if '[PREGUNTA_EXAMEN]' in p]
-        if not priority_fragments:
-            # Si no hay de examen, buscamos los etiquetados como destacados
-            priority_fragments = [p for p in request.context.split('\n\n') if '[DESTACADO]' in p]
-
-        # Si después de buscar ambos no encontramos nada, informamos al usuario
+        ### --- INICIO DE LA LÓGICA DE BÚSQUEDA ROBUSTA --- ###
+        
+        # 1. Usamos expresiones regulares para encontrar TODO el texto que sigue a una etiqueta.
+        #    El patrón busca la etiqueta y captura todo hasta que encuentra la siguiente etiqueta o el final del texto.
+        exam_fragments = re.findall(r'\[PREGUNTA_EXAMEN\](.*?)(\[PREGUNTA_EXAMEN\]|\[DESTACADO\]|\[FECHA_CLAVE\]|$)', request.context, re.DOTALL)
+        highlighted_fragments = re.findall(r'\[DESTACADO\](.*?)(\[PREGUNTA_EXAMEN\]|\[DESTACADO\]|\[FECHA_CLAVE\]|$)', request.context, re.DOTALL)
+        
+        # La función findall devuelve tuplas, nos quedamos con el primer elemento (el texto)
+        exam_fragments = [match[0].strip() for match in exam_fragments]
+        highlighted_fragments = [match[0].strip() for match in highlighted_fragments]
+        
+        # 2. Decidimos de dónde coger el fragmento a explicar
+        priority_fragments = []
+        if exam_fragments:
+            print("Fragmentos de [PREGUNTA_EXAMEN] encontrados.")
+            priority_fragments = exam_fragments
+        elif highlighted_fragments:
+            print("Fragmentos de [DESTACADO] encontrados.")
+            priority_fragments = highlighted_fragments
+        
         if not priority_fragments:
             return {"answer": "No he encontrado conceptos clave especialmente marcados en este temario para explicar."}
 
-        # Elegimos un concepto importante al azar de la lista de priorizados
-        chosen_fragment_raw = random.choice(priority_fragments)
-        
-        # Limpiamos las etiquetas del fragmento para que Gemini no las vea
-        cleaned_fragment = chosen_fragment_raw.replace('[PREGUNTA_EXAMEN]', '').replace('[DESTACADO]', '').strip()
+        ### --- FIN DE LA LÓGICA DE BÚSQUEDA --- ###
 
+        chosen_fragment = random.choice(priority_fragments)
+        
         prompt = f"""
         Actúa como un profesor de derecho experto. Un opositor te ha pedido que le expliques
         en profundidad uno de los conceptos más importantes de su temario.
 
         El concepto clave a explicar es el siguiente:
         ---
-        {cleaned_fragment}
+        {chosen_fragment}
         ---
 
         Por favor, genera una explicación clara, detallada y fácil de entender sobre este concepto.
-        Estructura la respuesta de forma didáctica. Puedes usar ejemplos si ayuda a la comprensión,
-        pero no añadas información que no se pueda inferir del propio fragmento.
+        Estructura la respuesta de forma didáctica. No añadas información que no se pueda inferir del propio fragmento.
         """
         model = genai.GenerativeModel('gemini-1.5-pro-latest')
         response = model.generate_content(prompt)
