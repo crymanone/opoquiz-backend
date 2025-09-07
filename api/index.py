@@ -125,61 +125,72 @@ def get_random_question(user_id: str = Depends(get_current_user)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al seleccionar tema aleatorio: {str(e)}")
 
+# Reemplaza la función ask_topic completa en tu api/index.py con esta:
+
 @app.post("/api/ask-topic")
 def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
     try:
-        context_to_use = ""
-        context_source = ""
         user_query_lower = request.query.lower()
 
-        # --- LÓGICA DE DECISIÓN MEJORADA ---
-        # Si el usuario pide un resumen Y TENEMOS un resumen, lo usamos.
-        if ('resumen' in user_query_lower or 'esquema' in user_query_lower) and request.summary_context:
-            print("Petición de resumen detectada. Usando 'summary_context'.")
-            context_to_use = request.summary_context
-            context_source = "el resumen proporcionado"
-        # Si no, usamos el contexto completo si existe
-        elif request.context:
-            print("Usando contexto completo del tema.")
-            context_to_use = request.context
-            context_source = "el temario"
-        # Si no hay ningún contexto, usamos el del resumen si es lo único que hay
-        elif request.summary_context:
-             print("No se proporcionó contexto principal, usando 'summary_context' como fallback.")
-             context_to_use = request.summary_context
-             context_source = "el resumen proporcionado"
+        # Condición para detectar la petición de resumen a través de un comando especial
+        is_summary_request = (request.query == "SYSTEM_COMMAND_GENERATE_SUMMARY")
+
+        if is_summary_request and request.summary_context:
+            print("Petición de resumen detectada. Usando 'summary_context' con prompt especializado.")
+            
+            prompt = f"""
+            **ROL:** Eres un académico experto en derecho y un preparador de oposiciones de élite.
+            Tu tarea es crear un resumen ejecutivo y muy bien estructurado del temario proporcionado.
+
+            **INSTRUCCIONES ESPECÍFICAS PARA EL RESUMEN:**
+            1.  **Formato:** Estructura tu respuesta usando Markdown. Utiliza encabezados, negritas y listas de viñetas para una máxima claridad.
+            2.  **Puntos Clave:** Identifica y extrae los conceptos, definiciones y datos más importantes del texto. No hagas un resumen genérico; enfócate en lo que un opositor necesita memorizar.
+            3.  **Artículos Relevantes:** Menciona explícitamente los números de los artículos más importantes discutidos en el texto (ej: "según el Artículo 9.3...").
+            4.  **Fechas y Plazos:** Si el texto menciona fechas, plazos o datos numéricos cruciales, destácalos claramente en una sección o en negrita.
+            5.  **Leyes y Regulaciones:** Si se mencionan otras leyes o Reales Decretos, inclúyelos en el resumen.
+            6.  **Extensión:** El resumen debe ser extenso y detallado, cubriendo todos los puntos importantes del texto proporcionado, pero sin añadir información externa.
+
+            **--- TEXTO DEL RESUMEN/ESQUEMA PARA ANALIZAR ---**
+            {request.summary_context}
+            ---
+
+            **--- RESUMEN ESTRUCTURADO ---**
+            """
         else:
-            # Si no nos llega ningún contexto, no podemos hacer nada
-            return {"answer": "Lo siento, no se ha proporcionado ningún temario para poder responder a tu pregunta."}
+            # Lógica para preguntas normales del usuario
+            print("Petición de pregunta normal detectada.")
+            context_to_use = request.context or request.summary_context
+            
+            if not context_to_use:
+                return {"answer": "Lo siento, no se ha proporcionado ningún temario para poder responder a tu pregunta."}
+            
+            prompt = f"""
+            Actúa como un tutor experto de oposiciones extremadamente preciso y riguroso. Tu única fuente
+            de conocimiento es el siguiente texto. No puedes usar información externa.
 
+            INSTRUCCIONES:
+            1. Responde a la pregunta del usuario de forma clara y directa.
+            2. Después de tu respuesta, añade una sección llamada "Fuente" y cita textualmente la
+               frase o frases del temario proporcionado en las que te has basado para responder.
+            3. Si la respuesta no se encuentra en el texto, indícalo claramente.
 
-        prompt = f"""
-        Actúa como un tutor experto de oposiciones. Tu fuente de conocimiento es el texto de {context_source}.
-        Responde a la pregunta del usuario de forma clara, concisa y basándote
-        estrictamente en la información proporcionada.No puedes usar información externa.
+            --- TEXTO DEL TEMARIO ---
+            {context_to_use}
+            ---
 
-        INSTRUCCIONES:
-        1. Responde a la pregunta del usuario de forma clara y directa.
-        2. Después de tu respuesta, añade una sección llamada "Fuente" y cita textualmente la
-              frase o frases del temario proporcionado en las que te has basado para responder.
-        3. Si la respuesta no se encuentra en el texto, indícalo claramente.
-
-        --- TEXTO FUENTE ---
-        {context_to_use}
-        ---
-
-        --- PREGUNTA DEL USUARIO ---
-        {request.query}
-        ---
-
-        Respuesta:
-        """
+            --- PREGUNTA DEL USUARIO ---
+            {request.query}
+            ---
+            """
+        
+        # El modelo Pro es ideal para ambas tareas, tanto de razonamiento como de resumen
         model = genai.GenerativeModel('gemini-1.5-pro-latest')
         response = model.generate_content(prompt)
         
         return {"answer": response.text}
 
     except Exception as e:
+        print(f"!!! ERROR GRAVE en /api/ask-topic: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/tests/start")
