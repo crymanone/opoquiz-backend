@@ -288,6 +288,19 @@ def get_most_failed_questions(user_id: str = Depends(get_current_user)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.get("/api/get-topic-context/{topic_id}")
+def get_topic_context(topic_id: int, user_id: str = Depends(get_current_user)):
+    """
+    Devuelve el texto completo y el texto del resumen de un tema específico.
+    """
+    try:
+        response = supabase.table('topics').select("content, summary_text").eq('id', topic_id).single().execute()
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Tema no encontrado")
+        return response.data
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))        
+
 # --- FUNCIÓN REUTILIZABLE PARA GENERAR PREGUNTAS ---
 
 def generate_question_from_topic(topic_id: int, user_id: str):
@@ -366,3 +379,6 @@ def generate_question_from_topic(topic_id: int, user_id: str):
     except Exception as e:
         print(f"!!! ERROR GRAVE EN EL BACKEND: {e}")
         raise HTTPException(status_code=500, detail=f"El backend falló al generar la pregunta: {str(e)}")
+
+
+        
