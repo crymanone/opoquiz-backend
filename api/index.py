@@ -133,41 +133,52 @@ def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
     try:
         is_summary_request = (request.query == "SYSTEM_COMMAND_GENERATE_SUMMARY")
 
-        # --- LÓGICA DE PROMPT CORREGIDA ---
-
         if is_summary_request and request.summary_context:
-            print("Petición de resumen detectada. Usando prompt especializado.")
+            print("Petición de resumen detectada. Usando prompt de plantilla.")
             
-            # --- USAMOS DE NUEVO EL PROMPT DETALLADO Y EXIGENTE ---
+            # --- PROMPT DE PLANTILLA ESTRUCTURADA ---
             prompt = f"""
-            **ROL:** Eres un académico experto y un preparador de oposiciones de élite.
-            **TAREA:** Crea un resumen ejecutivo EXTENSO y muy bien estructurado del temario proporcionado.
+            **ROL:** Eres un sistema de IA que transforma texto legal denso en apuntes estructurados para opositores.
 
-            **INSTRUCCIONES OBLIGATORIAS:**
-            1.  **Formato Markdown:** Usa encabezados (`#`), negritas (`**...**`) y listas (`- ...`) para una máxima claridad.
-            2.  **Puntos Clave:** Identifica y extrae los conceptos, definiciones y datos más importantes.
-            3.  **Artículos, Fechas y Leyes:** Menciona y destaca explícitamente cualquier artículo, fecha, plazo o ley relevante que aparezca en el texto.
-            4.  **Extensión y Detalle:** El resumen debe ser detallado y cubrir todos los puntos importantes del texto. No seas escueto.
+            **TAREA:** Analiza el texto del temario proporcionado y rellena la siguiente plantilla de resumen. Debes ser exhaustivo.
 
-            **--- TEXTO DEL RESUMEN A ANALIZAR ---**
+            **TEXTO A RESUMIR:**
+            ---
             {request.summary_context}
             ---
 
-            **--- EMPIEZA AQUÍ TU RESUMEN ESTRUCTURADO ---**
-            """
-            model = genai.GenerativeModel('gemini-1.5-pro-latest') # Usamos Pro para la mejor calidad de resumen
+            **PLANTILLA DE SALIDA (RELLENA TODAS LAS SECCIONES QUE PUEDAS):**
 
-        else: # Lógica para preguntas normales del usuario
-            print("Petición de pregunta normal detectada.")
+            ### Puntos Clave del Tema
+            - (Rellena con una lista de 3 a 5 conceptos fundamentales)
+            - ...
+            - ...
+
+            ### Artículos Más Importantes
+            - **Artículo [Número]:** (Breve descripción de su contenido)
+            - **Artículo [Número]:** (Breve descripción de su contenido)
+            - ...
+
+            ### Fechas y Plazos Cruciales
+            - **[Fecha]:** (Descripción del evento o plazo)
+            - **[Fecha]:** (Descripción del evento o plazo)
+            - ...
+            
+            ### Leyes o Regulaciones Mencionadas
+            - (Lista aquí cualquier otra ley, Real Decreto, etc., que se mencione)
+            - ...
+
+            ### Resumen Narrativo Detallado
+            (Aquí, proporciona un resumen más extenso en prosa que conecte las ideas anteriores)
+            """
+        else: # Lógica para preguntas normales (sin cambios)
             context_to_use = request.context or request.summary_context
             if not context_to_use:
                 return {"answer": "Lo siento, no se ha proporcionado temario para responder."}
-            
             prompt = f"""
             Actúa como un tutor experto. Responde a la pregunta del usuario basándote
             estrictamente en el TEXTO DEL TEMARIO. Después de tu respuesta, añade una sección
             "**Fuente:**" y cita textualmente la frase en la que te has basado.
-            
             --- TEXTO DEL TEMARIO ---
             {context_to_use}
             ---
@@ -175,8 +186,8 @@ def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
             {request.query}
             ---
             """
-            model = genai.GenerativeModel('gemini-1.5-pro-latest') # Mantenemos Pro para la máxima precisión
-
+        
+        model = genai.GenerativeModel('gemini-1.5-pro-latest')
         response = model.generate_content(prompt)
         return {"answer": response.text}
 
@@ -186,44 +197,36 @@ def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
 @app.post("/api/get-highlighted-explanation")
 def get_highlighted_explanation(request: HighlightRequest, user_id: str = Depends(get_current_user)):
     try:
-        ### --- INICIO DE LA LÓGICA DE BÚSQUEDA ROBUSTA --- ###
+        context = request.context
         
-        # 1. Usamos expresiones regulares para encontrar TODO el texto que sigue a una etiqueta.
-        #    El patrón busca la etiqueta y captura todo hasta que encuentra la siguiente etiqueta o el final del texto.
-        exam_fragments = re.findall(r'\[PREGUNTA_EXAMEN\](.*?)(\[PREGUNTA_EXAMEN\]|\[DESTACADO\]|\[FECHA_CLAVE\]|$)', request.context, re.DOTALL)
-        highlighted_fragments = re.findall(r'\[DESTACADO\](.*?)(\[PREGUNTA_EXAMEN\]|\[DESTACADO\]|\[FECHA_CLAVE\]|$)', request.context, re.DOTALL)
+        # --- LÓGICA DE BÚSQUEDA A PRUEBA DE FALLOS ---
         
-        # La función findall devuelve tuplas, nos quedamos con el primer elemento (el texto)
-        exam_fragments = [match[0].strip() for match in exam_fragments]
-        highlighted_fragments = [match[0].strip() for match in highlighted_fragments]
+        all_tags = ['[PREGUNTA_EXAMEN]', '[DESTACADO]', '[FECHA_CLAVE]']
         
-        # 2. Decidimos de dónde coger el fragmento a explicar
-        priority_fragments = []
-        if exam_fragments:
-            print("Fragmentos de [PREGUNTA_EXAMEN] encontrados.")
-            priority_fragments = exam_fragments
-        elif highlighted_fragments:
-            print("Fragmentos de [DESTACADO] encontrados.")
-            priority_fragments = highlighted_fragments
-        
-        if not priority_fragments:
-            return {"answer": "No he encontrado conceptos clave especialmente marcados en este temario para explicar."}
+        # Buscamos fragmentos que contengan CUALQUIERA de las etiquetas
+        tagged_fragments = [p.strip() for p in context.split('\n\n') if any(tag in p for tag in all_tags)]
 
-        ### --- FIN DE LA LÓGICA DE BÚSQUEDA --- ###
+        if not tagged_fragments:
+            return {"answer": "Lo siento, no he encontrado ningún concepto clave (como [PREGUNTA_EXAMEN] o [DESTACADO]) en el texto del temario."}
 
-        chosen_fragment = random.choice(priority_fragments)
+        print(f"Encontrados {len(tagged_fragments)} fragmentos etiquetados.")
+        chosen_fragment = random.choice(tagged_fragments)
+        
+        # Limpiamos TODAS las etiquetas posibles del fragmento
+        cleaned_fragment = chosen_fragment
+        for tag in all_tags:
+            cleaned_fragment = cleaned_fragment.replace(tag, '')
+        cleaned_fragment = cleaned_fragment.strip()
+        
+        # --- FIN DE LA LÓGICA ---
         
         prompt = f"""
-        Actúa como un profesor de derecho experto. Un opositor te ha pedido que le expliques
-        en profundidad uno de los conceptos más importantes de su temario.
-
-        El concepto clave a explicar es el siguiente:
+        Actúa como un profesor experto. Un opositor te ha pedido que le expliques en profundidad
+        el siguiente concepto clave de su temario:
         ---
-        {chosen_fragment}
+        {cleaned_fragment}
         ---
-
-        Por favor, genera una explicación clara, detallada y fácil de entender sobre este concepto.
-        Estructura la respuesta de forma didáctica. No añadas información que no se pueda inferir del propio fragmento.
+        Genera una explicación clara, detallada y fácil de entender.
         """
         model = genai.GenerativeModel('gemini-1.5-pro-latest')
         response = model.generate_content(prompt)
