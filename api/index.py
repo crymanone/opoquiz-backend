@@ -134,44 +134,24 @@ def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
         is_summary_request = (request.query == "SYSTEM_COMMAND_GENERATE_SUMMARY")
 
         if is_summary_request and request.summary_context:
-            print("Petición de resumen detectada. Usando prompt de plantilla.")
-            
-            # --- PROMPT DE PLANTILLA ESTRUCTURADA ---
             prompt = f"""
-            **ROL:** Eres un sistema de IA que transforma texto legal denso en apuntes estructurados para opositores.
+            **ROL:** Eres un sistema de IA experto en crear apuntes de estudio para opositores a partir de un texto base.
 
-            **TAREA:** Analiza el texto del temario proporcionado y rellena la siguiente plantilla de resumen. Debes ser exhaustivo.
+            **TAREA:** Analiza el texto que te proporciono y genera un resumen muy estructurado.
+
+            **INSTRUCCIONES OBLIGATORIAS PARA LA SALIDA:**
+            1.  Crea una sección titulada `### Puntos Clave del Tema` y, debajo, una lista con viñetas de los 3-5 conceptos más fundamentales.
+            2.  Crea una sección titulada `### Artículos Importantes` y, debajo, una lista de los artículos de leyes mencionados y una breve descripción de cada uno.
+            3.  Crea una sección titulada `### Fechas y Plazos Cruciales` y, debajo, una lista de las fechas y plazos relevantes.
+            4.  Finalmente, crea una sección `### Resumen Detallado` y escribe un párrafo largo que explique el contenido en su totalidad.
 
             **TEXTO A RESUMIR:**
             ---
             {request.summary_context}
             ---
-
-            **PLANTILLA DE SALIDA (RELLENA TODAS LAS SECCIONES QUE PUEDAS):**
-
-            ### Puntos Clave del Tema
-            - (Rellena con una lista de 3 a 5 conceptos fundamentales)
-            - ...
-            - ...
-
-            ### Artículos Más Importantes
-            - **Artículo [Número]:** (Breve descripción de su contenido)
-            - **Artículo [Número]:** (Breve descripción de su contenido)
-            - ...
-
-            ### Fechas y Plazos Cruciales
-            - **[Fecha]:** (Descripción del evento o plazo)
-            - **[Fecha]:** (Descripción del evento o plazo)
-            - ...
-            
-            ### Leyes o Regulaciones Mencionadas
-            - (Lista aquí cualquier otra ley, Real Decreto, etc., que se mencione)
-            - ...
-
-            ### Resumen Narrativo Detallado
-            (Aquí, proporciona un resumen más extenso en prosa que conecte las ideas anteriores)
             """
-        else: # Lógica para preguntas normales (sin cambios)
+        else: # Lógica para preguntas normales
+            # (Esta parte ya estaba bien, la dejamos igual)
             context_to_use = request.context or request.summary_context
             if not context_to_use:
                 return {"answer": "Lo siento, no se ha proporcionado temario para responder."}
@@ -194,30 +174,42 @@ def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/api/get-highlighted-explanation")
+@@app.post("/api/get-highlighted-explanation")
 def get_highlighted_explanation(request: HighlightRequest, user_id: str = Depends(get_current_user)):
     try:
         context = request.context
         
-        # --- LÓGICA DE BÚSQUEDA A PRUEBA DE FALLOS ---
+        ### --- LÓGICA DE BÚSQUEDA DEFINITIVA --- ###
         
         all_tags = ['[PREGUNTA_EXAMEN]', '[DESTACADO]', '[FECHA_CLAVE]']
         
-        # Buscamos fragmentos que contengan CUALQUIERA de las etiquetas
-        tagged_fragments = [p.strip() for p in context.split('\n\n') if any(tag in p for tag in all_tags)]
-
-        if not tagged_fragments:
-            return {"answer": "Lo siento, no he encontrado ningún concepto clave (como [PREGUNTA_EXAMEN] o [DESTACADO]) en el texto del temario."}
-
-        print(f"Encontrados {len(tagged_fragments)} fragmentos etiquetados.")
-        chosen_fragment = random.choice(tagged_fragments)
-        
-        # Limpiamos TODAS las etiquetas posibles del fragmento
-        cleaned_fragment = chosen_fragment
+        # 1. Encontrar todas las posiciones de nuestras etiquetas
+        found_tags = []
         for tag in all_tags:
-            cleaned_fragment = cleaned_fragment.replace(tag, '')
-        cleaned_fragment = cleaned_fragment.strip()
+            for match in re.finditer(re.escape(tag), context):
+                found_tags.append((match.start(), tag))
         
+        if not found_tags:
+            return {"answer": "No he encontrado conceptos clave especialmente marcados en este temario para explicar."}
+
+        # 2. Elegir una etiqueta al azar para explicar
+        random_tag_start, tag_type = random.choice(found_tags)
+        
+        # 3. Extraer el texto DESPUÉS de la etiqueta, hasta el final de la línea o párrafo.
+        #    Buscamos el final del texto relevante.
+        end_of_text = context.find('\n', random_tag_start)
+        if end_of_text == -1:
+            end_of_text = len(context) # Si no hay salto de línea, hasta el final
+            
+        # Extraemos el fragmento completo
+        fragment_with_tag = context[random_tag_start:end_of_text]
+        
+        # Limpiamos la etiqueta del fragmento
+        cleaned_fragment = fragment_with_tag.replace(tag_type, '').strip()
+
+        if not cleaned_fragment:
+             return {"answer": "Se encontró una etiqueta, pero el texto asociado parece estar vacío."}
+
         # --- FIN DE LA LÓGICA ---
         
         prompt = f"""
