@@ -136,10 +136,8 @@ def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
         if is_summary_request and request.summary_context:
             print("Petición de resumen detectada. Usando prompt de plantilla directa.")
             
-            # --- PROMPT DE PLANTILLA SIMPLIFICADO Y DIRECTO ---
             prompt = f"""
             **ROL:** Eres un sistema de IA experto en crear apuntes de estudio para opositores.
-
             **TAREA:** Analiza el texto proporcionado y genera un resumen muy estructurado
             siguiendo estrictamente el siguiente formato Markdown. Sé conciso pero completo.
 
@@ -162,9 +160,27 @@ def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
             ### Resumen General
             (Escribe aquí un resumen de 2-3 párrafos conectando las ideas anteriores)
             """
-        else: # Lógica para preguntas normales (sin cambios)
-            # ... (código sin cambios)
-
+        else: # Lógica para preguntas normales
+            # --- INICIO DEL BLOQUE INDENTADO ---
+            print("Petición de pregunta normal detectada.")
+            context_to_use = request.context or request.summary_context
+            if not context_to_use:
+                return {"answer": "Lo siento, no se ha proporcionado temario para responder."}
+            
+            prompt = f"""
+            Actúa como un tutor experto. Responde a la pregunta del usuario basándote
+            estrictamente en el TEXTO DEL TEMARIO. Después de tu respuesta, añade una sección
+            "**Fuente:**" y cita textualmente la frase en la que te has basado.
+            --- TEXTO DEL TEMARIO ---
+            {context_to_use}
+            ---
+            --- PREGUNTA DEL USUARIO ---
+            {request.query}
+            ---
+            """
+            # --- FIN DEL BLOQUE INDENTADO ---
+        
+        # Esta parte se ejecuta para AMBOS casos, por lo que va fuera del if/else
         model = genai.GenerativeModel('gemini-1.5-pro-latest')
         response = model.generate_content(prompt)
         return {"answer": response.text}
