@@ -156,7 +156,13 @@ def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
         prompt = f"""
         Actúa como un tutor experto de oposiciones. Tu fuente de conocimiento es el texto de {context_source}.
         Responde a la pregunta del usuario de forma clara, concisa y basándote
-        estrictamente en la información proporcionada.
+        estrictamente en la información proporcionada.No puedes usar información externa.
+
+        INSTRUCCIONES:
+        1. Responde a la pregunta del usuario de forma clara y directa.
+        2. Después de tu respuesta, añade una sección llamada "Fuente" y cita textualmente la
+              frase o frases del temario proporcionado en las que te has basado para responder.
+        3. Si la respuesta no se encuentra en el texto, indícalo claramente.
 
         --- TEXTO FUENTE ---
         {context_to_use}
@@ -168,7 +174,7 @@ def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
 
         Respuesta:
         """
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        model = genai.GenerativeModel('gemini-1.5-pro-latest')
         response = model.generate_content(prompt)
         
         return {"answer": response.text}
