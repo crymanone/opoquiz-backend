@@ -174,7 +174,7 @@ def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@@app.post("/api/get-highlighted-explanation")
+@app.post("/api/get-highlighted-explanation")
 def get_highlighted_explanation(request: HighlightRequest, user_id: str = Depends(get_current_user)):
     try:
         context = request.context
