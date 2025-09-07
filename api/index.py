@@ -22,9 +22,10 @@ app = FastAPI()
 
 # --- MODELOS DE DATOS Pydantic ---
 class AskRequest(BaseModel):
-    context: str
+    # Ahora el contexto es opcional, porque a veces solo enviaremos el resumen
+    context: Optional[str] = None 
+    summary_context: Optional[str] = None # <-- NUEVO
     query: str
-    schema_url: Optional[str] = None
 class TestResponse(BaseModel):
     test_id: int
     question_text: str
@@ -126,41 +127,42 @@ def get_random_question(user_id: str = Depends(get_current_user)):
 
 @app.post("/api/ask-topic")
 def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
-    """
-    Recibe un texto de contexto (el temario) y una pregunta del usuario.
-    Usa Gemini para generar una respuesta a la pregunta basada en el contexto.
-    """
     try:
-        # Construimos un prompt específico para la tarea de "Tutor de IA"
+        context_to_use = ""
+        context_source = ""
+
+        # Decidimos qué contexto usar basándonos en la petición
+        if "resumen" in request.query.lower() or "esquema" in request.query.lower() and request.summary_context:
+            print("Usando contexto del RESUMEN.")
+            context_to_use = request.summary_context
+            context_source = "el resumen proporcionado"
+        else:
+            print("Usando contexto COMPLETO del tema.")
+            context_to_use = request.context
+            context_source = "el temario"
+        
         prompt = f"""
-        Actúa como un tutor experto de oposiciones. Tu única fuente de conocimiento es el siguiente texto.
-        No puedes usar información externa. Responde a la pregunta del usuario de forma clara, concisa y
-        basándote estrictamente en la información proporcionada en el texto.
-        Si la respuesta no se encuentra en el texto, indica amablemente que no tienes
-        información sobre ese punto en el material de estudio.
+        Actúa como un tutor experto de oposiciones. Tu fuente de conocimiento es el texto de {context_source}.
+        Responde a la pregunta del usuario de forma clara, concisa y basándote
+        estrictamente en la información proporcionada.
 
         --- TEXTO DEL TEMARIO ---
-        {request.context}
+        {context_to_use}
         ---
 
         --- PREGUNTA DEL USUARIO ---
         {request.query}
         ---
 
-        Respuesta concisa y directa:
+        Respuesta:
         """
-
-        # Usamos un modelo rápido y eficiente para el chat
         model = genai.GenerativeModel('gemini-1.5-flash-latest')
         response = model.generate_content(prompt)
         
-        # Devolvemos la respuesta real de Gemini
         return {"answer": response.text}
 
     except Exception as e:
-        print(f"!!! ERROR GRAVE en /api/ask-topic: {e}")
-        # Si algo falla, devolvemos un mensaje de error claro a la app
-        raise HTTPException(status_code=500, detail=f"Error de la IA: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/tests/start")
 def start_new_test(request: NewTestRequest, user_id: str = Depends(get_current_user)):
