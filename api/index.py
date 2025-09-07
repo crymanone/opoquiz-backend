@@ -130,23 +130,35 @@ def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
     try:
         context_to_use = ""
         context_source = ""
+        user_query_lower = request.query.lower()
 
-        # Decidimos qué contexto usar basándonos en la petición
-        if "resumen" in request.query.lower() or "esquema" in request.query.lower() and request.summary_context:
-            print("Usando contexto del RESUMEN.")
+        # --- LÓGICA DE DECISIÓN MEJORADA ---
+        # Si el usuario pide un resumen Y TENEMOS un resumen, lo usamos.
+        if ('resumen' in user_query_lower or 'esquema' in user_query_lower) and request.summary_context:
+            print("Petición de resumen detectada. Usando 'summary_context'.")
             context_to_use = request.summary_context
             context_source = "el resumen proporcionado"
-        else:
-            print("Usando contexto COMPLETO del tema.")
+        # Si no, usamos el contexto completo si existe
+        elif request.context:
+            print("Usando contexto completo del tema.")
             context_to_use = request.context
             context_source = "el temario"
-        
+        # Si no hay ningún contexto, usamos el del resumen si es lo único que hay
+        elif request.summary_context:
+             print("No se proporcionó contexto principal, usando 'summary_context' como fallback.")
+             context_to_use = request.summary_context
+             context_source = "el resumen proporcionado"
+        else:
+            # Si no nos llega ningún contexto, no podemos hacer nada
+            return {"answer": "Lo siento, no se ha proporcionado ningún temario para poder responder a tu pregunta."}
+
+
         prompt = f"""
         Actúa como un tutor experto de oposiciones. Tu fuente de conocimiento es el texto de {context_source}.
         Responde a la pregunta del usuario de forma clara, concisa y basándote
         estrictamente en la información proporcionada.
 
-        --- TEXTO DEL TEMARIO ---
+        --- TEXTO FUENTE ---
         {context_to_use}
         ---
 
