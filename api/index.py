@@ -34,6 +34,8 @@ class TestResponse(BaseModel):
 class NewTestRequest(BaseModel):
     topic_id: Optional[int] = None
     is_random_test: bool = False
+class HighlightRequest(BaseModel):
+    context: str    
 
 # --- CONFIGURACIÓN DE APIS ---
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -192,6 +194,46 @@ def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
     except Exception as e:
         print(f"!!! ERROR GRAVE en /api/ask-topic: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/get-highlighted-explanation")
+def get_highlighted_explanation(request: HighlightRequest, user_id: str = Depends(get_current_user)):
+    try:
+        # Buscamos primero fragmentos etiquetados como de examen
+        priority_fragments = [p for p in request.context.split('\n\n') if '[PREGUNTA_EXAMEN]' in p]
+        if not priority_fragments:
+            # Si no hay de examen, buscamos los etiquetados como destacados
+            priority_fragments = [p for p in request.context.split('\n\n') if '[DESTACADO]' in p]
+
+        # Si después de buscar ambos no encontramos nada, informamos al usuario
+        if not priority_fragments:
+            return {"answer": "No he encontrado conceptos clave especialmente marcados en este temario para explicar."}
+
+        # Elegimos un concepto importante al azar de la lista de priorizados
+        chosen_fragment_raw = random.choice(priority_fragments)
+        
+        # Limpiamos las etiquetas del fragmento para que Gemini no las vea
+        cleaned_fragment = chosen_fragment_raw.replace('[PREGUNTA_EXAMEN]', '').replace('[DESTACADO]', '').strip()
+
+        prompt = f"""
+        Actúa como un profesor de derecho experto. Un opositor te ha pedido que le expliques
+        en profundidad uno de los conceptos más importantes de su temario.
+
+        El concepto clave a explicar es el siguiente:
+        ---
+        {cleaned_fragment}
+        ---
+
+        Por favor, genera una explicación clara, detallada y fácil de entender sobre este concepto.
+        Estructura la respuesta de forma didáctica. Puedes usar ejemplos si ayuda a la comprensión,
+        pero no añadas información que no se pueda inferir del propio fragmento.
+        """
+        model = genai.GenerativeModel('gemini-1.5-pro-latest')
+        response = model.generate_content(prompt)
+        return {"answer": response.text}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))        
 
 @app.post("/api/tests/start")
 def start_new_test(request: NewTestRequest, user_id: str = Depends(get_current_user)):
