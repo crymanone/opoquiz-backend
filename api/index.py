@@ -128,30 +128,57 @@ def get_random_question(user_id: str = Depends(get_current_user)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al seleccionar tema aleatorio: {str(e)}")
 
+# Reemplaza la función ask_topic en tu api/index.py
+
 @app.post("/api/ask-topic")
 def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
     try:
         is_summary_request = (request.query == "SYSTEM_COMMAND_GENERATE_SUMMARY")
 
         if is_summary_request and request.summary_context:
+            print("Petición de resumen detectada. Usando prompt de plantilla con 'Chain of Thought'.")
+            
+            # --- PROMPT DE PLANTILLA ESTRUCTURADA v2 ---
             prompt = f"""
-            **ROL:** Eres un sistema de IA experto en crear apuntes de estudio para opositores a partir de un texto base.
+            **ROL:** Eres un sistema de IA experto en crear apuntes de estudio para opositores.
 
-            **TAREA:** Analiza el texto que te proporciono y genera un resumen muy estructurado.
-
-            **INSTRUCCIONES OBLIGATORIAS PARA LA SALIDA:**
-            1.  Crea una sección titulada `### Puntos Clave del Tema` y, debajo, una lista con viñetas de los 3-5 conceptos más fundamentales.
-            2.  Crea una sección titulada `### Artículos Importantes` y, debajo, una lista de los artículos de leyes mencionados y una breve descripción de cada uno.
-            3.  Crea una sección titulada `### Fechas y Plazos Cruciales` y, debajo, una lista de las fechas y plazos relevantes.
-            4.  Finalmente, crea una sección `### Resumen Detallado` y escribe un párrafo largo que explique el contenido en su totalidad.
+            **TAREA:** Analiza el TEXTO A RESUMIR y sigue un proceso de pensamiento en dos pasos para generar un resumen detallado y estructurado.
 
             **TEXTO A RESUMIR:**
             ---
             {request.summary_context}
             ---
+
+            **PROCESO DE PENSAMIENTO (Paso 1):**
+            Primero, piensa para ti mismo. Lee el texto y extrae la siguiente información sin procesar. No la muestres en la salida final, úsala para construir la respuesta:
+            1.  Identifica los 5 conceptos más fundamentales.
+            2.  Haz una lista de todos los números de artículos de leyes que se mencionan.
+            3.  Haz una lista de todas las fechas y plazos.
+            4.  Haz una lista de cualquier otra ley o regulación que se nombre.
+
+            **PLANTILLA DE SALIDA (Paso 2):**
+            Ahora, usa la información que has recopilado en el paso 1 para rellenar la siguiente plantilla de forma EXTENSA y detallada. Tu respuesta final debe seguir estrictamente este formato Markdown.
+
+            ### Puntos Clave del Tema
+            - (Usa los conceptos fundamentales que identificaste para escribir una lista clara y explicada)
+            - ...
+
+            ### Artículos Más Importantes
+            - (Para cada artículo que encontraste, descríbelo: **Artículo [Número]:** Descripción...)
+            - ...
+
+            ### Fechas y Plazos Cruciales
+            - (Para cada fecha que encontraste, descríbela: **[Fecha]:** Descripción del evento...)
+            - ...
+            
+            ### Leyes o Regulaciones Mencionadas
+            - (Lista aquí las otras leyes que encontraste)
+
+            ### Resumen Narrativo Detallado
+            (Finalmente, escribe un resumen en prosa de varios párrafos que conecte todas las ideas anteriores de forma coherente y completa)
             """
-        else: # Lógica para preguntas normales
-            # (Esta parte ya estaba bien, la dejamos igual)
+        else: # Lógica para preguntas normales del usuario
+            print("Petición de pregunta normal detectada.")
             context_to_use = request.context or request.summary_context
             if not context_to_use:
                 return {"answer": "Lo siento, no se ha proporcionado temario para responder."}
@@ -179,44 +206,29 @@ def get_highlighted_explanation(request: HighlightRequest, user_id: str = Depend
     try:
         context = request.context
         
-        ### --- LÓGICA DE BÚSQUEDA DEFINITIVA --- ###
+        # --- LÓGICA DE BÚSQUEDA CON EXPRESIONES REGULARES ---
         
-        all_tags = ['[PREGUNTA_EXAMEN]', '[DESTACADO]', '[FECHA_CLAVE]']
+        # Patrón para buscar una etiqueta y capturar el texto hasta el siguiente salto de línea
+        exam_fragments = re.findall(r'\[PREGUNTA_EXAMEN\]\s*(.*?)\n', context)
+        highlighted_fragments = re.findall(r'\[DESTACADO\]\s*(.*?)\n', context)
+        date_fragments = re.findall(r'\[FECHA_CLAVE\]\s*(.*?)\n', context)
         
-        # 1. Encontrar todas las posiciones de nuestras etiquetas
-        found_tags = []
-        for tag in all_tags:
-            for match in re.finditer(re.escape(tag), context):
-                found_tags.append((match.start(), tag))
+        # Unimos todos los fragmentos encontrados en una lista de prioridad
+        priority_fragments = exam_fragments + highlighted_fragments + date_fragments
         
-        if not found_tags:
-            return {"answer": "No he encontrado conceptos clave especialmente marcados en este temario para explicar."}
+        if not priority_fragments:
+            return {"answer": "No he encontrado conceptos con etiquetas especiales ([PREGUNTA_EXAMEN], [DESTACADO], etc.) en el temario."}
 
-        # 2. Elegir una etiqueta al azar para explicar
-        random_tag_start, tag_type = random.choice(found_tags)
-        
-        # 3. Extraer el texto DESPUÉS de la etiqueta, hasta el final de la línea o párrafo.
-        #    Buscamos el final del texto relevante.
-        end_of_text = context.find('\n', random_tag_start)
-        if end_of_text == -1:
-            end_of_text = len(context) # Si no hay salto de línea, hasta el final
-            
-        # Extraemos el fragmento completo
-        fragment_with_tag = context[random_tag_start:end_of_text]
-        
-        # Limpiamos la etiqueta del fragmento
-        cleaned_fragment = fragment_with_tag.replace(tag_type, '').strip()
+        print(f"Encontrados {len(priority_fragments)} fragmentos etiquetados para explicar.")
+        chosen_fragment = random.choice(priority_fragments)
 
-        if not cleaned_fragment:
-             return {"answer": "Se encontró una etiqueta, pero el texto asociado parece estar vacío."}
-
-        # --- FIN DE LA LÓGICA ---
+        # El fragmento ya viene limpio de la etiqueta gracias a la captura del grupo (.*?)
         
         prompt = f"""
         Actúa como un profesor experto. Un opositor te ha pedido que le expliques en profundidad
         el siguiente concepto clave de su temario:
         ---
-        {cleaned_fragment}
+        {chosen_fragment.strip()}
         ---
         Genera una explicación clara, detallada y fácil de entender.
         """
