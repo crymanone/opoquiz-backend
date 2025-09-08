@@ -269,7 +269,7 @@ def get_topic_context(topic_id: int, user_id: str = Depends(get_current_user)):
     Devuelve el texto completo y el texto del resumen de un tema específico.
     """
     try:
-        response = supabase.table('topics').select("content, summary_text").eq('id', topic_id).single().execute()
+        response = supabase.table('topics').select("content").eq('id', topic_id).single().execute()
         if not response.data:
             raise HTTPException(status_code=404, detail="Tema no encontrado")
         return response.data
