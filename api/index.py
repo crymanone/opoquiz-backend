@@ -107,9 +107,9 @@ def read_root():
     return {"status": "OpoQuiz API está conectada y funcionando!"}
 
 @app.get("/api/topics", response_model=List[dict])
-def get_topics():
+def get_topics(user_id: str = Depends(get_current_user)):
     try:
-        response = supabase.table('topics').select('id, title, pdf_url, schema_url').execute()
+        response = supabase.table('topics').select('id, title, pdf_url').execute()
         return response.data
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
