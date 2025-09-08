@@ -23,10 +23,11 @@ app = FastAPI()
 
 # --- MODELOS DE DATOS Pydantic ---
 class AskRequest(BaseModel):
-    # Ahora el contexto es opcional, porque a veces solo enviaremos el resumen
-    context: Optional[str] = None 
-    summary_context: Optional[str] = None # <-- NUEVO
+    context: str # El texto del temario O del resumen
     query: str
+    # La propiedad schema_url ya no se usa, pero la dejamos por si la
+    # implementamos en el futuro con imágenes.
+    schema_url: Optional[str] = None
 class TestResponse(BaseModel):
     test_id: int
     question_text: str
@@ -113,6 +114,24 @@ def get_topics():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/api/topics/{topic_id}/summaries")
+def get_topic_summaries(topic_id: int, user_id: str = Depends(get_current_user)):
+    """
+    Consulta la tabla 'resumenes' y devuelve una lista de todos los resúmenes
+    disponibles para un 'topic_id' específico.
+    """
+    try:
+        # Seleccionamos todas las columnas de la tabla 'resumenes' que
+        # coincidan con el topic_id proporcionado.
+        response = supabase.table('resumenes').select('*').eq('topic_id', topic_id).execute()
+        
+        # Devolvemos los datos. Si no hay resúmenes, será una lista vacía.
+        return {"summaries": response.data}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))        
+
 @app.get("/api/get-question")
 def get_question(topic_id: int, user_id: str = Depends(get_current_user)):
     return generate_question_from_topic(topic_id, user_id)
@@ -128,59 +147,28 @@ def get_random_question(user_id: str = Depends(get_current_user)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al seleccionar tema aleatorio: {str(e)}")
 
+# Reemplaza tu función ask_topic por esta versión más simple
+
 @app.post("/api/ask-topic")
 def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
     try:
-        is_summary_request = (request.query == "SYSTEM_COMMAND_GENERATE_SUMMARY")
-
-        if is_summary_request and request.summary_context:
-            print("Petición de resumen detectada. Usando prompt de plantilla directa.")
-            
-            prompt = f"""
-            **ROL:** Eres un sistema de IA experto en crear apuntes de estudio para opositores.
-            **TAREA:** Analiza el texto proporcionado y genera un resumen muy estructurado
-            siguiendo estrictamente el siguiente formato Markdown. Sé conciso pero completo.
-
-            **TEXTO A RESUMIR:**
-            ---
-            {request.summary_context}
-            ---
-
-            **SALIDA REQUERIDA:**
-
-            ### Puntos Clave
-            - (Lista aquí los 3-5 conceptos más importantes)
-
-            ### Artículos Relevantes
-            - (Lista los artículos de leyes mencionados y su idea principal)
-
-            ### Fechas Importantes
-            - (Lista las fechas o plazos cruciales)
-
-            ### Resumen General
-            (Escribe aquí un resumen de 2-3 párrafos conectando las ideas anteriores)
-            """
-        else: # Lógica para preguntas normales
-            # --- INICIO DEL BLOQUE INDENTADO ---
-            print("Petición de pregunta normal detectada.")
-            context_to_use = request.context or request.summary_context
-            if not context_to_use:
-                return {"answer": "Lo siento, no se ha proporcionado temario para responder."}
-            
-            prompt = f"""
-            Actúa como un tutor experto. Responde a la pregunta del usuario basándote
-            estrictamente en el TEXTO DEL TEMARIO. Después de tu respuesta, añade una sección
-            "**Fuente:**" y cita textualmente la frase en la que te has basado.
-            --- TEXTO DEL TEMARIO ---
-            {context_to_use}
-            ---
-            --- PREGUNTA DEL USUARIO ---
-            {request.query}
-            ---
-            """
-            # --- FIN DEL BLOQUE INDENTADO ---
+        # El prompt ahora es siempre el mismo, el de "Tutor experto"
+        prompt = f"""
+        Actúa como un tutor experto de oposiciones. Tu única fuente de conocimiento es el texto
+        proporcionado. Responde a la pregunta del usuario de forma clara y concisa
+        basándote estrictamente en la información proporcionada.
         
-        # Esta parte se ejecuta para AMBOS casos, por lo que va fuera del if/else
+        Después de tu respuesta, añade una sección "**Fuente:**" y cita textualmente la
+        frase del temario en la que te has basado.
+
+        --- TEXTO FUENTE ---
+        {request.context}
+        ---
+        --- PREGUNTA DEL USUARIO ---
+        {request.query}
+        ---
+        """
+        
         model = genai.GenerativeModel('gemini-1.5-pro-latest')
         response = model.generate_content(prompt)
         return {"answer": response.text}
