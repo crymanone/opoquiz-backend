@@ -124,7 +124,7 @@ def get_topic_summaries(topic_id: int, user_id: str = Depends(get_current_user))
     try:
         # Seleccionamos todas las columnas de la tabla 'resumenes' que
         # coincidan con el topic_id proporcionado.
-        response = supabase.table('resumenes').select('*').eq('topic_id', topic_id).execute()
+        response = supabase.table('resumenes').select('id, titulo, content').eq('topic_id', topic_id).execute()
         
         # Devolvemos los datos. Si no hay resúmenes, será una lista vacía.
         return {"summaries": response.data}
