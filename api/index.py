@@ -23,10 +23,9 @@ app = FastAPI()
 
 # --- MODELOS DE DATOS Pydantic ---
 class AskRequest(BaseModel):
-    context: str # El texto del temario O del resumen
+    context: Optional[str] = None # Hacemos ambos opcionales
     query: str
-    # La propiedad schema_url ya no se usa, pero la dejamos por si la
-    # implementamos en el futuro con imágenes.
+    summary_context: Optional[str] = None # <-- AÑADIDO
     schema_url: Optional[str] = None
 class TestResponse(BaseModel):
     test_id: int
@@ -177,7 +176,7 @@ def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
             (Escribe aquí 2-3 párrafos de resumen)
             """
             # --- CAMBIO CLAVE: Usamos Flash para máxima velocidad ---
-            model = genai.GenerativeModel('gemini-2.0-flash')
+            model = genai.GenerativeModel('gemini-2.0-flash-lite')
 
         else: # Lógica para preguntas normales del usuario
             print("Petición de pregunta normal detectada.")
@@ -196,7 +195,7 @@ def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
             ---
             """
             # --- CAMBIO CLAVE: Usamos Flash también aquí para respuestas rápidas ---
-            model = genai.GenerativeModel('gemini-2.0-flash')
+            model = genai.GenerativeModel('gemini-2.0-flash-lite')
 
         # La llamada a Gemini es la misma
         response = model.generate_content(prompt, request_options={"timeout": 60}) # 60 segundos de timeout es suficiente para Flash
@@ -237,7 +236,7 @@ def get_highlighted_explanation(request: HighlightRequest, user_id: str = Depend
         ---
         Genera una explicación clara, detallada y fácil de entender.
         """
-        model = genai.GenerativeModel('gemini-2.5-pro')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         response = model.generate_content(prompt)
         return {"answer": response.text}
 
