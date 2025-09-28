@@ -169,7 +169,7 @@ def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
         ---
         """
         
-        model = genai.GenerativeModel('gemini-1.5-pro-latest')
+        model = genai.GenerativeModel('gemini-2.5-pro')
         response = model.generate_content(prompt)
         return {"answer": response.text}
 
@@ -207,7 +207,7 @@ def get_highlighted_explanation(request: HighlightRequest, user_id: str = Depend
         ---
         Genera una explicación clara, detallada y fácil de entender.
         """
-        model = genai.GenerativeModel('gemini-1.5-pro-latest')
+        model = genai.GenerativeModel('gemini-2.5-pro')
         response = model.generate_content(prompt)
         return {"answer": response.text}
 
@@ -323,7 +323,7 @@ def generate_question_from_topic(topic_id: int, user_id: str):
 
         # --- 4. GENERACIÓN Y FILTRADO EN LOTE ---
         prompt = create_gemini_prompt_multiple(full_context=clean_fragment(full_text), fragments=selected_fragments)
-        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         gemini_response = model.generate_content(prompt)
         cleaned_response = gemini_response.text.strip().replace("```json", "").replace("```", "").strip()
         
