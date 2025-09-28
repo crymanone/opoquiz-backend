@@ -177,7 +177,7 @@ def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
             (Escribe aquí 2-3 párrafos de resumen)
             """
             # --- CAMBIO CLAVE: Usamos Flash para máxima velocidad ---
-            model = genai.GenerativeModel('gemini-2.5-flash')
+            model = genai.GenerativeModel('gemini-2.0-flash')
 
         else: # Lógica para preguntas normales del usuario
             print("Petición de pregunta normal detectada.")
@@ -196,7 +196,7 @@ def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
             ---
             """
             # --- CAMBIO CLAVE: Usamos Flash también aquí para respuestas rápidas ---
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-2.0-flash')
 
         # La llamada a Gemini es la misma
         response = model.generate_content(prompt, request_options={"timeout": 60}) # 60 segundos de timeout es suficiente para Flash
@@ -353,7 +353,7 @@ def generate_question_from_topic(topic_id: int, user_id: str):
 
         # --- 4. GENERACIÓN Y FILTRADO EN LOTE ---
         prompt = create_gemini_prompt_multiple(full_context=clean_fragment(full_text), fragments=selected_fragments)
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        model = genai.GenerativeModel('gemini-2.0-flash')
         gemini_response = model.generate_content(prompt)
         cleaned_response = gemini_response.text.strip().replace("```json", "").replace("```", "").strip()
         
