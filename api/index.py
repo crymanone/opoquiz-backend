@@ -149,28 +149,70 @@ def get_random_question(user_id: str = Depends(get_current_user)):
 
 # Reemplaza tu función ask_topic por esta versión más simple
 
+# En api/index.py
+
 @app.post("/api/ask-topic")
 def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
     try:
-        # El prompt ahora es siempre el mismo, el de "Tutor experto"
-        prompt = f"""
-        Actúa como un tutor experto de oposiciones. Tu única fuente de conocimiento es el texto
-        proporcionado. Responde a la pregunta del usuario de forma clara y concisa
-        basándote estrictamente en la información proporcionada.
-        
-        Después de tu respuesta, añade una sección "**Fuente:**" y cita textualmente la
-        frase del temario en la que te has basado.
+        is_summary_request = (request.query == "SYSTEM_COMMAND_GENERATE_SUMMARY")
 
-        --- TEXTO FUENTE ---
-        {request.context}
-        ---
-        --- PREGUNTA DEL USUARIO ---
-        {request.query}
-        ---
-        """
+        if is_summary_request:
+            # --- LÓGICA PARA PETICIONES DE RESUMEN ---
+            print("Petición de resumen detectada. Usando prompt de plantilla.")
+            if not request.summary_context:
+                 return {"answer": "Lo siento, no hay un texto de resumen disponible para este tema."}
+
+            prompt = f"""
+            **ROL:** Eres un sistema de IA experto en crear apuntes de estudio para opositores.
+            **TAREA:** Analiza el texto proporcionado y genera un resumen muy estructurado
+            siguiendo estrictamente el siguiente formato Markdown. Sé conciso pero completo.
+
+            **TEXTO A RESUMIR:**
+            ---
+            {request.summary_context}
+            ---
+
+            **SALIDA REQUERIDA:**
+
+            ### Puntos Clave
+            - (Lista aquí los 3-5 conceptos más importantes)
+
+            ### Artículos Relevantes
+            - (Lista los artículos de leyes mencionados y su idea principal)
+
+            ### Fechas Importantes
+            - (Lista las fechas o plazos cruciales)
+            
+            ### Resumen General
+            (Escribe aquí 2-3 párrafos de resumen)
+            """
+            # Usamos el modelo 'flash' para que la generación del resumen sea rápida
+            model = genai.GenerativeModel('gemini-1.5-flash')
+
+        else:
+            # --- LÓGICA PARA PREGUNTAS NORMALES DEL USUARIO ---
+            print("Petición de pregunta normal detectada.")
+            context_to_use = request.context
+            if not context_to_use:
+                return {"answer": "Lo siento, no se ha proporcionado temario para responder."}
+            
+            prompt = f"""
+            Actúa como un tutor experto. Responde a la pregunta del usuario basándote
+            estrictamente en el TEXTO DEL TEMARIO. Después de tu respuesta, añade una sección
+            "**Fuente:**" y cita textualmente la frase en la que te has basado.
+            --- TEXTO DEL TEMARIO ---
+            {context_to_use}
+            ---
+            --- PREGUNTA DEL USUARIO ---
+            {request.query}
+            ---
+            """
+            # Usamos el modelo 'pro' para la máxima precisión en las respuestas
+            model = genai.GenerativeModel('gemini-2.5-pro')
+
+        # La llamada a Gemini es la misma, solo cambia el prompt y el modelo
+        response = model.generate_content(prompt, request_options={"timeout": 120}) # Aumentamos el timeout del lado del servidor
         
-        model = genai.GenerativeModel('gemini-2.5-pro')
-        response = model.generate_content(prompt)
         return {"answer": response.text}
 
     except Exception as e:
