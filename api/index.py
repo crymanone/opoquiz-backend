@@ -177,7 +177,7 @@ def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
             (Escribe aquí 2-3 párrafos de resumen)
             """
             # --- CAMBIO CLAVE: Usamos Flash para máxima velocidad ---
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-2.5-flash')
 
         else: # Lógica para preguntas normales del usuario
             print("Petición de pregunta normal detectada.")
