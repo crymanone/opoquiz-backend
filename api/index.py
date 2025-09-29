@@ -155,26 +155,36 @@ def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
         if is_summary_request and request.summary_context:
             print("Petición de resumen detectada. Usando prompt de plantilla con modelo FLASH.")
             
-            prompt = f"""
-            **ROL:** Eres un sistema de IA experto en crear apuntes de estudio para opositores.
-            **TAREA:** Analiza el texto proporcionado y genera un resumen muy estructurado
-            siguiendo estrictamente el siguiente formato Markdown. Sé conciso pero completo.
+             prompt = f"""
+        **ROL:** Eres un sistema de IA experto en crear apuntes de estudio de alta calidad para opositores. Tu objetivo es la claridad, la exhaustividad y la precisión.
 
-            **TEXTO A RESUMIR:**
-            ---
-            {request.summary_context}
-            ---
+        **TAREA:** Analiza el texto proporcionado y genera un resumen muy estructurado
+        siguiendo estrictamente el siguiente formato Markdown.
 
-            **SALIDA REQUERIDA:**
-            ### Puntos Clave
-            - (Lista aquí los 3-5 conceptos más importantes)
-            ### Artículos Relevantes
-            - (Lista los artículos de leyes mencionados y su idea principal)
-            ### Fechas Importantes
-            - (Lista las fechas o plazos cruciales)
-            ### Resumen General
-            (Escribe aquí 2-3 párrafos de resumen)
-            """
+        **TEXTO A RESUMIR:**
+        ---
+        {request.summary_context}
+        ---
+
+        **FORMATO DE SALIDA OBLIGATORIO (RELLENA CADA SECCIÓN CON PROFUNDIDAD):**
+
+        ### Puntos Clave Fundamentales
+        - (Usa viñetas para listar y explicar brevemente los 3 a 5 conceptos más esenciales del texto.)
+
+        ### Artículos y Legislación Relevante
+        - (Crea una lista de todos los artículos de leyes mencionados. Para cada uno, escribe el número del artículo en negrita y explica su contenido principal.)
+
+        ### Fechas y Plazos Cruciales
+        - (Si existen, crea una lista de todas las fechas y plazos importantes, explicando qué ocurrió en cada una.)
+        
+        ### Resumen General Desarrollado
+        (Escribe un resumen en prosa de varios párrafos que conecte todas las ideas anteriores.)
+        
+        ---
+        
+        ### Fuente Principal
+        (Aquí, cita textualmente la frase o párrafo más importante del "TEXTO A RESUMIR" que, en tu opinión, encapsula la idea central de todo el documento.)
+        """
             # --- CAMBIO CLAVE: Usamos Flash para máxima velocidad ---
             model = genai.GenerativeModel('gemini-2.0-flash-lite')
 
