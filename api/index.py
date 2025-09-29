@@ -153,46 +153,47 @@ def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
         is_summary_request = (request.query == "SYSTEM_COMMAND_GENERATE_SUMMARY")
 
         if is_summary_request and request.summary_context:
-            print("Petición de resumen detectada. Usando prompt de plantilla con modelo FLASH.")
+            print("Petición de resumen detectada. Usando prompt de plantilla detallada con fuente.")
             
-             prompt = f"""
-        **ROL:** Eres un sistema de IA experto en crear apuntes de estudio de alta calidad para opositores. Tu objetivo es la claridad, la exhaustividad y la precisión.
+            prompt = f"""
+            **ROL:** Eres un sistema de IA experto en crear apuntes de estudio de alta calidad para opositores. Tu objetivo es la claridad, la exhaustividad y la precisión.
 
-        **TAREA:** Analiza el texto proporcionado y genera un resumen muy estructurado
-        siguiendo estrictamente el siguiente formato Markdown.
+            **TAREA:** Analiza el texto proporcionado y genera un resumen muy estructurado
+            siguiendo estrictamente el siguiente formato Markdown.
 
-        **TEXTO A RESUMIR:**
-        ---
-        {request.summary_context}
-        ---
+            **TEXTO A RESUMIR:**
+            ---
+            {request.summary_context}
+            ---
 
-        **FORMATO DE SALIDA OBLIGATORIO (RELLENA CADA SECCIÓN CON PROFUNDIDAD):**
+            **FORMATO DE SALIDA OBLIGATORIO (RELLENA CADA SECCIÓN CON PROFUNDIDAD):**
 
-        ### Puntos Clave Fundamentales
-        - (Usa viñetas para listar y explicar brevemente los 3 a 5 conceptos más esenciales del texto.)
+            ### Puntos Clave Fundamentales
+            - (Usa viñetas para listar y explicar brevemente los 3 a 5 conceptos más esenciales del texto.)
 
-        ### Artículos y Legislación Relevante
-        - (Crea una lista de todos los artículos de leyes mencionados. Para cada uno, escribe el número del artículo en negrita y explica su contenido principal.)
+            ### Artículos y Legislación Relevante
+            - (Crea una lista de todos los artículos de leyes mencionados. Para cada uno, escribe el número del artículo en negrita y explica su contenido principal.)
 
-        ### Fechas y Plazos Cruciales
-        - (Si existen, crea una lista de todas las fechas y plazos importantes, explicando qué ocurrió en cada una.)
-        
-        ### Resumen General Desarrollado
-        (Escribe un resumen en prosa de varios párrafos que conecte todas las ideas anteriores.)
-        
-        ---
-        
-        ### Fuente Principal
-        (Aquí, cita textualmente la frase o párrafo más importante del "TEXTO A RESUMIR" que, en tu opinión, encapsula la idea central de todo el documento.)
-        """
-            # --- CAMBIO CLAVE: Usamos Flash para máxima velocidad ---
-            model = genai.GenerativeModel('gemini-2.0-flash-lite')
+            ### Fechas y Plazos Cruciales
+            - (Si existen, crea una lista de todas las fechas y plazos importantes, explicando qué ocurrió en cada una.)
+            
+            ### Resumen General Desarrollado
+            (Escribe un resumen en prosa de varios párrafos que conecte todas las ideas anteriores.)
+            
+            ---
+            
+            ### Fuente Principal
+            (Aquí, cita textualmente la frase o párrafo más importante del "TEXTO A RESUMIR" que, en tu opinión, encapsula la idea central de todo el documento.)
+            """
+            model = genai.GenerativeModel('gemini-1.5-flash')
 
-        else: # Lógica para preguntas normales del usuario
+        else:
+            # --- INICIO DEL BLOQUE CON INDENTACIÓN CORREGIDA ---
             print("Petición de pregunta normal detectada.")
-            context_to_use = request.context
+            context_to_use = request.context or request.summary_context
             if not context_to_use:
                 return {"answer": "Lo siento, no se ha proporcionado temario para responder."}
+            
             prompt = f"""
             Actúa como un tutor experto. Responde a la pregunta del usuario basándote
             estrictamente en el TEXTO DEL TEMARIO. Después de tu respuesta, añade una sección
@@ -204,12 +205,12 @@ def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
             {request.query}
             ---
             """
-            # --- CAMBIO CLAVE: Usamos Flash también aquí para respuestas rápidas ---
-            model = genai.GenerativeModel('gemini-2.0-flash-lite')
+            # El modelo Pro es mejor para la precisión de las preguntas directas
+            model = genai.GenerativeModel('gemini-1.5-pro-latest')
+            # --- FIN DEL BLOQUE CON INDENTACIÓN CORREGIDA ---
 
-        # La llamada a Gemini es la misma
-        response = model.generate_content(prompt, request_options={"timeout": 60}) # 60 segundos de timeout es suficiente para Flash
-        
+        # Esta parte se ejecuta para ambos casos
+        response = model.generate_content(prompt)
         return {"answer": response.text}
 
     except Exception as e:
