@@ -185,7 +185,7 @@ def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
             ### Fuente Principal
             (Aquí, cita textualmente la frase o párrafo más importante del "TEXTO A RESUMIR" que, en tu opinión, encapsula la idea central de todo el documento.)
             """
-            model = genai.GenerativeModel('gemini-1.5-flash')
+            model = genai.GenerativeModel('gemini-2.5-flash')
 
         else:
             # --- INICIO DEL BLOQUE CON INDENTACIÓN CORREGIDA ---
@@ -206,7 +206,7 @@ def ask_topic(request: AskRequest, user_id: str = Depends(get_current_user)):
             ---
             """
             # El modelo Pro es mejor para la precisión de las preguntas directas
-            model = genai.GenerativeModel('gemini-1.5-pro-latest')
+            model = genai.GenerativeModel('gemini-2.5-pro')
             # --- FIN DEL BLOQUE CON INDENTACIÓN CORREGIDA ---
 
         # Esta parte se ejecuta para ambos casos
@@ -363,7 +363,7 @@ def generate_question_from_topic(topic_id: int, user_id: str):
 
         # --- 4. GENERACIÓN Y FILTRADO EN LOTE ---
         prompt = create_gemini_prompt_multiple(full_context=clean_fragment(full_text), fragments=selected_fragments)
-        model = genai.GenerativeModel('gemini-2.0-flash')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         gemini_response = model.generate_content(prompt)
         cleaned_response = gemini_response.text.strip().replace("```json", "").replace("```", "").strip()
         
