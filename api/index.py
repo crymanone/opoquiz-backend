@@ -320,74 +320,44 @@ def get_topic_context(topic_id: int, user_id: str = Depends(get_current_user)):
 
 def generate_question_from_topic(topic_id: int, user_id: str):
     try:
-        # --- 1. OBTENCIÓN DE DATOS ---
+        # Volvemos a la lógica de generar UN LOTE y elegir UNA AL AZAR
+        # SIN el filtro de similitud para garantizar la velocidad.
+        
         response = supabase.table('topics').select("content").eq('id', topic_id).single().execute()
         full_text = response.data.get('content')
-        if not full_text:
-            raise HTTPException(status_code=404, detail=f"El tema {topic_id} no tiene contenido.")
+        if not full_text: raise HTTPException(404, "Tema no encontrado")
         
         all_fragments = [p.strip() for p in full_text.split('\n\n') if len(p.strip()) > 150]
-        if not all_fragments:
-            raise HTTPException(status_code=400, detail="El tema es demasiado corto.")
-
-        ### --- INICIO DE LA OPTIMIZACIÓN --- ###
-
-        # 2. OBTENER HISTORIAL (REDUCIDO)
-        # Reducimos el límite de 100 a 30. Es suficiente para evitar repeticiones recientes.
-        recent_questions_response = supabase.table('preguntas_generadas') \
-            .select('question_text') \
-            .eq('topic_id', topic_id) \
-            .eq('user_id', user_id) \
-            .order('created_at', desc=True) \
-            .limit(30) \
-            .execute()
-        recent_question_texts = [q['question_text'] for q in recent_questions_response.data]
-
-        # 3. GENERAR UN LOTE DE CANDIDATAS (REDUCIDO)
-        # Reducimos el lote de 5 a 3. Esto disminuye las llamadas a fuzz.
-        num_candidates = 3
-        num_to_select = min(num_candidates, len(all_fragments))
         
-        if num_to_select == 0:
-            raise HTTPException(status_code=400, detail="No hay fragmentos válidos.")
-            
+        # Usamos 5 fragmentos para maximizar la variedad de la entrada de Gemini
+        num_to_select = min(5, len(all_fragments))
+        if num_to_select == 0: raise HTTPException(400, "Tema demasiado corto")
         selected_fragments = random.sample(all_fragments, num_to_select)
+
         prompt = create_gemini_prompt_multiple(full_context=full_text, fragments=selected_fragments)
         
-        model = genai.GenerativeModel('gemini-2.5-flash')
-        gemini_response = model.generate_content(prompt)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        gemini_response = model.generate_content(prompt, request_options={"timeout": 60})
+        
         cleaned_response = gemini_response.text.strip().replace("```json", "").replace("```", "").strip()
-        
-        try:
-            list_of_questions = json.loads(cleaned_response)
-        except json.JSONDecodeError:
-            raise HTTPException(status_code=500, detail="La IA devolvió un JSON inválido.")
+        list_of_questions = json.loads(cleaned_response)
 
-        # --- 4. FILTRADO (AHORA MUCHO MÁS RÁPIDO) ---
-        # Ahora solo haremos 3 * 30 = 90 comparaciones, en lugar de 500.
-        SIMILARITY_THRESHOLD = 90
-        
-        for candidate in list_of_questions:
-            candidate_text = candidate.get('question')
-            if not candidate_text: continue
+        # Elegimos una al azar del lote generado. La aleatoriedad viene de aquí.
+        final_question = random.choice(list_of_questions)
 
-            is_too_similar = any(fuzz.token_set_ratio(candidate_text, r) > SIMILARITY_THRESHOLD for r in recent_question_texts)
-            
-            if not is_too_similar:
-                print("¡Pregunta única encontrada en el lote!")
-                supabase.table('preguntas_generadas').insert({'question_text': candidate_text, 'topic_id': topic_id, 'user_id': user_id}).execute()
-                candidate['topic_id'] = topic_id
-                return candidate
+        # La guardamos en el historial para análisis futuros, aunque no comprobemos ahora.
+        supabase.table('preguntas_generadas').insert({
+            'question_text': final_question['question'],
+            'topic_id': topic_id,
+            'user_id': user_id
+        }).execute()
         
-        # --- 5. FALLBACK (sin cambios) ---
-        print("Todas las candidatas del lote eran repetidas. Devolviendo una aleatoria.")
-        fallback_question = random.choice(list_of_questions)
-        fallback_question['topic_id'] = topic_id
-        return fallback_question
+        final_question['topic_id'] = topic_id
+        return final_question
 
     except Exception as e:
         print(f"!!! ERROR GRAVE EN EL BACKEND: {e}")
-        raise HTTPException(status_code=500, detail=f"El backend falló: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
         
