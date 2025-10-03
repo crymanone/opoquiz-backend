@@ -320,59 +320,53 @@ def get_topic_context(topic_id: int, user_id: str = Depends(get_current_user)):
 
 def generate_question_from_topic(topic_id: int, user_id: str):
     try:
-        # --- 1. OBTENCIÓN Y FRAGMENTACIÓN DEL TEXTO ---
+        # --- 1. OBTENCIÓN DE DATOS ---
         response = supabase.table('topics').select("content").eq('id', topic_id).single().execute()
         full_text = response.data.get('content')
         if not full_text:
-            raise HTTPException(status_code=404, detail=f"El tema {topic_id} no tiene contenido pre-procesado.")
+            raise HTTPException(status_code=404, detail=f"El tema {topic_id} no tiene contenido.")
         
-        all_fragments = [p.strip() for p in full_text.split('\n\n') if len(p.strip()) > 100]
+        all_fragments = [p.strip() for p in full_text.split('\n\n') if len(p.strip()) > 150]
         if not all_fragments:
-            raise HTTPException(status_code=400, detail="El tema es demasiado corto para generar fragmentos.")
+            raise HTTPException(status_code=400, detail="El tema es demasiado corto.")
 
-        # --- 2. LÓGICA DE SELECCIÓN DE FRAGMENTOS PRIORIZADA ---
-        exam_fragments = [f for f in all_fragments if '[PREGUNTA_EXAMEN]' in f]
-        highlighted_fragments = [f for f in all_fragments if '[DESTACADO]' in f]
+        ### --- INICIO DE LA OPTIMIZACIÓN --- ###
 
-        num_candidates = 5
-        source_fragments = []
-
-        if len(exam_fragments) >= num_candidates:
-            print("Seleccionando fragmentos de [PREGUNTA_EXAMEN]")
-            source_fragments = exam_fragments
-        elif len(exam_fragments) + len(highlighted_fragments) >= num_candidates:
-            print("Seleccionando fragmentos de [PREGUNTA_EXAMEN] y [DESTACADO]")
-            source_fragments = exam_fragments + highlighted_fragments
-        else:
-            print("Pocos fragmentos priorizados, seleccionando de todo el texto.")
-            source_fragments = all_fragments
-
-        def clean_fragment(text):
-            return text.replace('[PREGUNTA_EXAMEN]', '').replace('[DESTACADO]', '').replace('[FECHA_CLAVE]', '').strip()
-
-        num_to_select = min(num_candidates, len(source_fragments))
-        if num_to_select == 0:
-            raise HTTPException(status_code=400, detail="No hay fragmentos válidos en el tema.")
-        
-        selected_fragments_raw = random.sample(source_fragments, num_to_select)
-        selected_fragments = [clean_fragment(f) for f in selected_fragments_raw]
-
-        # --- 3. OBTENCIÓN DEL HISTORIAL DE PREGUNTAS ---
-        recent_questions_response = supabase.table('preguntas_generadas').select('question_text').eq('topic_id', topic_id).eq('user_id', user_id).order('created_at', desc=True).limit(50).execute()
+        # 2. OBTENER HISTORIAL (REDUCIDO)
+        # Reducimos el límite de 100 a 30. Es suficiente para evitar repeticiones recientes.
+        recent_questions_response = supabase.table('preguntas_generadas') \
+            .select('question_text') \
+            .eq('topic_id', topic_id) \
+            .eq('user_id', user_id) \
+            .order('created_at', desc=True) \
+            .limit(30) \
+            .execute()
         recent_question_texts = [q['question_text'] for q in recent_questions_response.data]
 
-        # --- 4. GENERACIÓN Y FILTRADO EN LOTE ---
-        prompt = create_gemini_prompt_multiple(full_context=clean_fragment(full_text), fragments=selected_fragments)
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        # 3. GENERAR UN LOTE DE CANDIDATAS (REDUCIDO)
+        # Reducimos el lote de 5 a 3. Esto disminuye las llamadas a fuzz.
+        num_candidates = 3
+        num_to_select = min(num_candidates, len(all_fragments))
+        
+        if num_to_select == 0:
+            raise HTTPException(status_code=400, detail="No hay fragmentos válidos.")
+            
+        selected_fragments = random.sample(all_fragments, num_to_select)
+        prompt = create_gemini_prompt_multiple(full_context=full_text, fragments=selected_fragments)
+        
+        model = genai.GenerativeModel('gemini-1.5-flash')
         gemini_response = model.generate_content(prompt)
         cleaned_response = gemini_response.text.strip().replace("```json", "").replace("```", "").strip()
         
         try:
             list_of_questions = json.loads(cleaned_response)
         except json.JSONDecodeError:
-            raise HTTPException(status_code=500, detail="La IA devolvió un formato JSON inválido en el lote.")
+            raise HTTPException(status_code=500, detail="La IA devolvió un JSON inválido.")
 
+        # --- 4. FILTRADO (AHORA MUCHO MÁS RÁPIDO) ---
+        # Ahora solo haremos 3 * 30 = 90 comparaciones, en lugar de 500.
         SIMILARITY_THRESHOLD = 90
+        
         for candidate in list_of_questions:
             candidate_text = candidate.get('question')
             if not candidate_text: continue
@@ -380,20 +374,20 @@ def generate_question_from_topic(topic_id: int, user_id: str):
             is_too_similar = any(fuzz.token_set_ratio(candidate_text, r) > SIMILARITY_THRESHOLD for r in recent_question_texts)
             
             if not is_too_similar:
-                print("¡Pregunta única y priorizada encontrada en el lote!")
+                print("¡Pregunta única encontrada en el lote!")
                 supabase.table('preguntas_generadas').insert({'question_text': candidate_text, 'topic_id': topic_id, 'user_id': user_id}).execute()
                 candidate['topic_id'] = topic_id
                 return candidate
         
-        # --- 5. FALLBACK ---
-        print("Todas las candidatas del lote eran repetidas. Devolviendo una aleatoria para no fallar.")
+        # --- 5. FALLBACK (sin cambios) ---
+        print("Todas las candidatas del lote eran repetidas. Devolviendo una aleatoria.")
         fallback_question = random.choice(list_of_questions)
         fallback_question['topic_id'] = topic_id
         return fallback_question
 
     except Exception as e:
         print(f"!!! ERROR GRAVE EN EL BACKEND: {e}")
-        raise HTTPException(status_code=500, detail=f"El backend falló al generar la pregunta: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"El backend falló: {str(e)}")
 
 
         
