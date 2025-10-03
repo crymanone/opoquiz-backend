@@ -1,6 +1,6 @@
 # api/index.py
 
-from fastapi import FastAPI, HTTPException, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, status, BackgroundTasks
 from fastapi.security import OAuth2PasswordBearer
 from pydantic import BaseModel
 from typing import Optional, List
@@ -99,7 +99,21 @@ def create_gemini_prompt_multiple(full_context: str, fragments: list) -> str:
     ---
     {fragment_section}
     """
-
+def save_question_to_history(question_data: dict, topic_id: int, user_id: str):
+    """
+    Función de ayuda que se ejecutará en segundo plano para guardar la pregunta.
+    """
+    try:
+        print(f"BG TASK: Guardando pregunta para el tema {topic_id} en el historial.")
+        supabase.table('preguntas_generadas').insert({
+            'question_text': question_data['question'],
+            'topic_id': topic_id,
+            'user_id': user_id
+        }).execute()
+        print("BG TASK: Pregunta guardada con éxito.")
+    except Exception as e:
+        print(f"!!! ERROR EN TAREA DE FONDO (save_question): {e}")
+        
 # --- ENDPOINTS DE LA API (AHORA PROTEGIDOS) ---
 @app.get("/api")
 def read_root():
@@ -132,17 +146,18 @@ def get_topic_summaries(topic_id: int, user_id: str = Depends(get_current_user))
         raise HTTPException(status_code=500, detail=str(e))        
 
 @app.get("/api/get-question")
-def get_question(topic_id: int, user_id: str = Depends(get_current_user)):
-    return generate_question_from_topic(topic_id, user_id)
+def get_question(topic_id: int, user_id: str = Depends(get_current_user), background_tasks: BackgroundTasks = BackgroundTasks()):
+    return generate_question_from_topic(topic_id, user_id, background_tasks)
 
 @app.get("/api/get-random-question")
-def get_random_question(user_id: str = Depends(get_current_user)):
+def get_random_question(user_id: str = Depends(get_current_user), background_tasks: BackgroundTasks = BackgroundTasks()):
     try:
         all_topics_response = supabase.table('topics').select('id').filter('content', 'not.is', 'null').execute()
         if not all_topics_response.data:
             raise HTTPException(status_code=404, detail="No hay temas con contenido.")
+        
         random_topic_id = random.choice(all_topics_response.data)['id']
-        return generate_question_from_topic(random_topic_id, user_id)
+        return generate_question_from_topic(random_topic_id, user_id, background_tasks)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al seleccionar tema aleatorio: {str(e)}")
         
@@ -318,76 +333,50 @@ def get_topic_context(topic_id: int, user_id: str = Depends(get_current_user)):
 
 # --- FUNCIÓN REUTILIZABLE PARA GENERAR PREGUNTAS ---
 
-def generate_question_from_topic(topic_id: int, user_id: str):
+def generate_question_from_topic(topic_id: int, user_id: str, background_tasks: BackgroundTasks):
     try:
-        # --- 1. OBTENCIÓN DE DATOS ---
+        # --- 1. OBTENER TEXTO ---
         response = supabase.table('topics').select("content").eq('id', topic_id).single().execute()
         full_text = response.data.get('content')
-        if not full_text:
-            raise HTTPException(status_code=404, detail=f"El tema {topic_id} no tiene contenido.")
+        if not full_text: 
+            raise HTTPException(status_code=404, detail="Tema no encontrado o sin contenido")
         
+        # --- 2. ELEGIR UN ÚNICO FRAGMENTO ---
         all_fragments = [p.strip() for p in full_text.split('\n\n') if len(p.strip()) > 150]
-        if not all_fragments:
-            raise HTTPException(status_code=400, detail="El tema es demasiado corto.")
+        if not all_fragments: 
+            raise HTTPException(status_code=400, detail="El contenido del tema es demasiado corto para generar preguntas")
+        selected_fragment = random.choice(all_fragments)
 
-        ### --- INICIO DE LA OPTIMIZACIÓN --- ###
+        # --- 3. GENERAR UNA ÚNICA PREGUNTA ---
+        prompt = f"""
+        Actúa como un tribunal de oposición. Basa una pregunta de test única y exclusivamente
+        en el siguiente FRAGMENTO ESPECÍFICO. Evita empezar la pregunta con "Según el fragmento...".
+        El formato de salida debe ser un único objeto JSON: 
+        {{"question": "...", "options": {{...}}, "correct_answer": "..."}}
 
-        # 2. OBTENER HISTORIAL (REDUCIDO)
-        # Reducimos el límite de 100 a 30. Es suficiente para evitar repeticiones recientes.
-        recent_questions_response = supabase.table('preguntas_generadas') \
-            .select('question_text') \
-            .eq('topic_id', topic_id) \
-            .eq('user_id', user_id) \
-            .order('created_at', desc=True) \
-            .limit(30) \
-            .execute()
-        recent_question_texts = [q['question_text'] for q in recent_questions_response.data]
-
-        # 3. GENERAR UN LOTE DE CANDIDATAS (REDUCIDO)
-        # Reducimos el lote de 5 a 3. Esto disminuye las llamadas a fuzz.
-        num_candidates = 3
-        num_to_select = min(num_candidates, len(all_fragments))
+        --- FRAGMENTO ESPECÍFICO ---
+        {selected_fragment}
+        ---
+        """
         
-        if num_to_select == 0:
-            raise HTTPException(status_code=400, detail="No hay fragmentos válidos.")
-            
-        selected_fragments = random.sample(all_fragments, num_to_select)
-        prompt = create_gemini_prompt_multiple(full_context=full_text, fragments=selected_fragments)
-        
-        model = genai.GenerativeModel('gemini-2.5-pro')
+        model = genai.GenerativeModel('gemini-2.0-flash') # Usando el modelo rápido que confirmaste
         gemini_response = model.generate_content(prompt)
+        
         cleaned_response = gemini_response.text.strip().replace("```json", "").replace("```", "").strip()
-        
-        try:
-            list_of_questions = json.loads(cleaned_response)
-        except json.JSONDecodeError:
-            raise HTTPException(status_code=500, detail="La IA devolvió un JSON inválido.")
+        final_question = json.loads(cleaned_response)
 
-        # --- 4. FILTRADO (AHORA MUCHO MÁS RÁPIDO) ---
-        # Ahora solo haremos 3 * 30 = 90 comparaciones, en lugar de 500.
-        SIMILARITY_THRESHOLD = 90
+        # --- 4. AÑADIR LA TAREA DE GUARDADO AL FONDO ---
+        # La API no esperará a que esto termine.
+        background_tasks.add_task(save_question_to_history, final_question, topic_id, user_id)
         
-        for candidate in list_of_questions:
-            candidate_text = candidate.get('question')
-            if not candidate_text: continue
-
-            is_too_similar = any(fuzz.token_set_ratio(candidate_text, r) > SIMILARITY_THRESHOLD for r in recent_question_texts)
-            
-            if not is_too_similar:
-                print("¡Pregunta única encontrada en el lote!")
-                supabase.table('preguntas_generadas').insert({'question_text': candidate_text, 'topic_id': topic_id, 'user_id': user_id}).execute()
-                candidate['topic_id'] = topic_id
-                return candidate
+        final_question['topic_id'] = topic_id
         
-        # --- 5. FALLBACK (sin cambios) ---
-        print("Todas las candidatas del lote eran repetidas. Devolviendo una aleatoria.")
-        fallback_question = random.choice(list_of_questions)
-        fallback_question['topic_id'] = topic_id
-        return fallback_question
+        # --- 5. DEVOLVER LA RESPUESTA INMEDIATAMENTE ---
+        return final_question
 
     except Exception as e:
         print(f"!!! ERROR GRAVE EN EL BACKEND: {e}")
-        raise HTTPException(status_code=500, detail=f"El backend falló: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
         
