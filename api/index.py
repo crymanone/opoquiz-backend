@@ -336,7 +336,7 @@ def generate_question_from_topic(topic_id: int, user_id: str):
 
         prompt = create_gemini_prompt_multiple(full_context=full_text, fragments=selected_fragments)
         
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-2.5-flash')
         gemini_response = model.generate_content(prompt, request_options={"timeout": 60})
         
         cleaned_response = gemini_response.text.strip().replace("```json", "").replace("```", "").strip()
