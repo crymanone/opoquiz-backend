@@ -329,7 +329,34 @@ def get_topic_context(topic_id: int, user_id: str = Depends(get_current_user)):
             raise HTTPException(status_code=404, detail="Tema no encontrado")
         return response.data
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))        
+        raise HTTPException(status_code=500, detail=str(e)) 
+
+
+### --- INICIO DE ENDPOINTS PARA MODO SIMULACRO --- ###
+
+@app.get("/api/exams")
+def get_exam_list(user_id: str = Depends(get_current_user)):
+    """Devuelve una lista de todos los simulacros de examen disponibles."""
+    try:
+        response = supabase.table('examenes').select('id, nombre, duracion_minutos, numero_preguntas').execute()
+        return {"exams": response.data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/exams/{exam_id}/questions")
+def get_exam_questions(exam_id: int, user_id: str = Depends(get_current_user)):
+    """Devuelve todas las preguntas para un examen específico."""
+    try:
+        response = supabase.table('preguntas_examen').select('*').eq('examen_id', exam_id).execute()
+        # Mezclamos las preguntas para que el orden sea diferente cada vez
+        questions = response.data
+        random.shuffle(questions)
+        return {"questions": questions}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+### --- FIN DE ENDPOINTS PARA MODO SIMULACRO --- ###
+    
 
 # --- FUNCIÓN REUTILIZABLE PARA GENERAR PREGUNTAS ---
 
