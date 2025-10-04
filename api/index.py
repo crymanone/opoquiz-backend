@@ -404,6 +404,23 @@ def generate_question_from_topic(topic_id: int, user_id: str, background_tasks: 
     except Exception as e:
         print(f"!!! ERROR GRAVE EN EL BACKEND: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+        
+def create_exam_prompt(full_context, num_questions=30):
+    return f"""
+    **ROL:** Eres un tribunal examinador para una oposición de Auxiliar Administrativo del Estado en España.
+    Tu tarea es crear un examen de test completo, coherente y realista.
 
+    **REGLAS ESTRICTAS:**
+    1.  **Fuente Única:** Basa TODAS las preguntas única y exclusivamente en el "TEMARIO COMPLETO" que te proporciono a continuación. No puedes usar ningún conocimiento externo.
+    2.  **Número de Preguntas:** Genera exactamente {num_questions} preguntas de test.
+    3.  **Variedad de Dificultad:** Incluye una mezcla de preguntas fáciles (datos directos), medias (requieren inferencia simple) y difíciles (requieren relacionar varios conceptos del texto).
+    4.  **Distribución de Contenido:** Asegúrate de que las preguntas cubran diferentes secciones del temario proporcionado, no te centres solo en una parte.
+    5.  **Formato de Salida:** Tu respuesta DEBE ser un array JSON que contenga {num_questions} objetos JSON, sin ningún otro texto. La estructura de cada objeto debe ser:
+        {{"question": "...", "options": {{"A": "...", "B": "...", "C": "..."}}, "correct_answer": "LETRA"}}
+
+    --- TEMARIO COMPLETO ---
+    {full_context}
+    ---
+    """
 
         
